@@ -65,6 +65,9 @@
     "mp-toutiao" : {
         "usingComponents" : true
     },
+    "mp-xhs" : {
+        "usingComponents" : true
+    },
     "uniStatistics": {  
         "enable": false
     },
