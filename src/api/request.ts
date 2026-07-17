@@ -1,0 +1,47 @@
+import { API_BASE_URL } from "@/config/api";
+import type { ApiErrorOptions } from "@/types/api";
+
+export class ApiError extends Error {
+  readonly statusCode?: number;
+  readonly cause?: unknown;
+
+  constructor(message: string, options: ApiErrorOptions = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.statusCode = options.statusCode;
+    this.cause = options.cause;
+  }
+}
+
+interface RequestOptions<TData> {
+  path: string;
+  method?: "GET" | "POST";
+  data?: TData;
+}
+
+export function request<TResponse, TData = Record<string, never>>(
+  options: RequestOptions<TData>,
+): Promise<TResponse> {
+  const normalizedPath = `/${options.path.replace(/^\/+/, "")}`;
+  return new Promise((resolve, reject) => {
+    uni.request({
+      url: `${API_BASE_URL}${normalizedPath}`,
+      method: options.method ?? "GET",
+      data: options.data as UniNamespace.RequestOptions["data"],
+      success(response) {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          resolve(response.data as TResponse);
+          return;
+        }
+        const serverMessage = (response.data as { message?: unknown } | undefined)?.message;
+        const message = typeof serverMessage === "string" && serverMessage.trim()
+          ? serverMessage
+          : `请求失败（HTTP ${response.statusCode}）`;
+        reject(new ApiError(message, { statusCode: response.statusCode }));
+      },
+      fail(error) {
+        reject(new ApiError(`网络请求失败：${error.errMsg || "请检查网络连接"}`, { cause: error }));
+      },
+    });
+  });
+}

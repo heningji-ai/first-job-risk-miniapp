@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
-onLaunch(() => {
-  console.log("App Launch");
-});
-onShow(() => {
-  console.log("App Show");
-});
-onHide(() => {
-  console.log("App Hide");
+import { onLaunch } from "@dcloudio/uni-app";
+import { resolveAttribution } from "@/attribution";
+import { getPlatform } from "@/platform";
+import { getVisitorId } from "@/storage/visitor";
+
+onLaunch((options) => {
+  getPlatform();
+  getVisitorId();
+  resolveAttribution(options?.query);
 });
 </script>
-<style></style>
+
+<style>
+page {
+  background: #f6f7fb;
+  color: #202431;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+</style>
