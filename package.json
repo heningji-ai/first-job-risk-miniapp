@@ -36,7 +36,8 @@
     "build:quickapp-webview-union": "uni build -p quickapp-webview-union",
     "type-check": "vue-tsc --noEmit",
     "test:goal-fit-domain": "node scripts/run-goal-fit-domain-test.cjs",
-    "test:assessment-flow": "node scripts/run-assessment-flow-test.cjs"
+    "test:assessment-flow": "node scripts/run-assessment-flow-test.cjs",
+    "check:release:weixin": "node scripts/check-weixin-release.cjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",

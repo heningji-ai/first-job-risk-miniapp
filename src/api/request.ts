@@ -27,6 +27,7 @@ export function request<TResponse, TData = Record<string, never>>(
     uni.request({
       url: `${API_BASE_URL}${normalizedPath}`,
       method: options.method ?? "GET",
+      timeout: 10000,
       data: options.data as UniNamespace.RequestOptions["data"],
       success(response) {
         if (response.statusCode >= 200 && response.statusCode < 300) {
