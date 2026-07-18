@@ -33,7 +33,7 @@ function start(): void {
   <view class="page">
     <view class="card">
       <text class="eyebrow">应届生求职场景预演</text>
-      <text class="title">第一份工作预演</text>
+      <text class="title">初入职场预演</text>
       <text class="description">在正式选择之前，先看清目标岗位与自己的匹配风险。</text>
       <view class="status"><text>当前平台</text><text>{{ platform }}</text></view>
       <view class="status"><text>价格接口</text><text>{{ pricingStatus }}</text></view>

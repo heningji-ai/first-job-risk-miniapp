@@ -3,7 +3,7 @@
     {
       "path": "pages/index/index",
       "style": {
-        "navigationBarTitleText": "第一份工作预演"
+        "navigationBarTitleText": "初入职场预演"
       }
     },
     {
@@ -23,7 +23,7 @@
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "第一份工作预演",
+    "navigationBarTitleText": "初入职场预演",
     "navigationBarBackgroundColor": "#FFFFFF",
     "backgroundColor": "#F6F7FB"
   }
