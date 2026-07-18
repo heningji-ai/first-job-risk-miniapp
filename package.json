@@ -35,7 +35,8 @@
     "build:quickapp-webview-huawei": "uni build -p quickapp-webview-huawei",
     "build:quickapp-webview-union": "uni build -p quickapp-webview-union",
     "type-check": "vue-tsc --noEmit",
-    "test:goal-fit-domain": "node scripts/run-goal-fit-domain-test.cjs"
+    "test:goal-fit-domain": "node scripts/run-goal-fit-domain-test.cjs",
+    "test:assessment-flow": "node scripts/run-assessment-flow-test.cjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",

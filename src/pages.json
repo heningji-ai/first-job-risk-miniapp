@@ -11,6 +11,14 @@
       "style": {
         "navigationBarTitleText": "选择你的目标"
       }
+    },
+    {
+      "path": "pages/assessment/index",
+      "style": { "navigationBarTitleText": "目标测试" }
+    },
+    {
+      "path": "pages/free-result/index",
+      "style": { "navigationBarTitleText": "免费结果" }
     }
   ],
   "globalStyle": {

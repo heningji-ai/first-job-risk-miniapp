@@ -24,6 +24,7 @@ onLoad(async (query) => {
 });
 
 function start(): void {
+  void trackEvent("test_start");
   uni.navigateTo({ url: "/pages/test-entry/index" });
 }
 </script>
