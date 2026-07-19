@@ -63,6 +63,7 @@
         "usingComponents" : true
     },
     "mp-toutiao" : {
+        "appid" : "tt6d0f1bb2f36a45e001",
         "usingComponents" : true
     },
     "mp-xhs" : {
