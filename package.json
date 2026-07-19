@@ -37,7 +37,8 @@
     "type-check": "vue-tsc --noEmit",
     "test:goal-fit-domain": "node scripts/run-goal-fit-domain-test.cjs",
     "test:assessment-flow": "node scripts/run-assessment-flow-test.cjs",
-    "check:release:weixin": "node scripts/check-weixin-release.cjs"
+    "check:release:weixin": "node scripts/check-weixin-release.cjs",
+    "check:release:xhs": "node scripts/check-xhs-release.cjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",
