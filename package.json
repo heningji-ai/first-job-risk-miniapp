@@ -37,6 +37,7 @@
     "type-check": "vue-tsc --noEmit",
     "test:goal-fit-domain": "node scripts/run-goal-fit-domain-test.cjs",
     "test:assessment-flow": "node scripts/run-assessment-flow-test.cjs",
+    "test:miniapp-session": "node scripts/run-miniapp-session-test.cjs",
     "check:release:weixin": "node scripts/check-weixin-release.cjs",
     "check:release:xhs": "node scripts/check-xhs-release.cjs"
   },
