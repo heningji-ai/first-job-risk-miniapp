@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "@/config/api";
+import { readMiniappSession } from "@/storage/miniapp-session";
 import type { ApiErrorOptions } from "@/types/api";
 
 export class ApiError extends Error {
@@ -17,17 +18,23 @@ interface RequestOptions<TData> {
   path: string;
   method?: "GET" | "POST";
   data?: TData;
+  requiresMiniappAuth?: boolean;
 }
 
 export function request<TResponse, TData = Record<string, never>>(
   options: RequestOptions<TData>,
 ): Promise<TResponse> {
   const normalizedPath = `/${options.path.replace(/^\/+/, "")}`;
+  const token = options.requiresMiniappAuth ? readMiniappSession()?.sessionToken : null;
+  if (options.requiresMiniappAuth && !token) {
+    return Promise.reject(new ApiError("MINIAPP_AUTH_REQUIRED"));
+  }
   return new Promise((resolve, reject) => {
     uni.request({
       url: `${API_BASE_URL}${normalizedPath}`,
       method: options.method ?? "GET",
       timeout: 10000,
+      header: token ? { Authorization: `Bearer ${token}` } : undefined,
       data: options.data as UniNamespace.RequestOptions["data"],
       success(response) {
         if (response.statusCode >= 200 && response.statusCode < 300) {
