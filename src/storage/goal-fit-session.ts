@@ -1,19 +1,21 @@
-import type { GoalFitAnswerMap, GoalFitResult, GoalFitScoreResult, CompanyType, RoleType } from "@/domain/goal-fit/types";
+import type { CompanyType, GoalFitAnswerMap, GoalFitResult, GoalFitScoreResult, RoleType } from "@/domain/goal-fit/types";
 
 const KEY = "first_job_goal_fit_completed_session_v1";
+export type AssessmentSyncStatus = "local_only" | "pending" | "syncing" | "completed";
+export type AssessmentVersions = { questionSetVersion: string; scoringVersion: string; reportVersion: string };
+export type OfficialFreeResult = { overallScore: number; overallConclusion: GoalFitResult["overallConclusion"]; primaryRisk: { title: string; description: string }; riskInsights: Array<{ title: string; description: string }>; recommendations: Array<{ title: string; description: string }> };
 export interface GoalFitCompletedSessionV1 {
-  schemaVersion: 1; id: string; targetCompany: CompanyType; targetRole: RoleType; selectedQuestionIds: string[];
-  answers: GoalFitAnswerMap; scores: GoalFitScoreResult; result: GoalFitResult; createdAt: string; completedAt: string;
+  schemaVersion: 1; id: string; targetCompany: CompanyType; targetRole: RoleType; selectedQuestionIds: string[]; answers: GoalFitAnswerMap;
+  scores?: GoalFitScoreResult; result?: GoalFitResult; createdAt: string; completedAt: string;
+  submissionId?: string; localFreeResult?: OfficialFreeResult; serverFreeResult?: OfficialFreeResult; assessmentId?: string; reportSnapshotId?: string; versions?: AssessmentVersions;
+  syncStatus?: AssessmentSyncStatus; syncAttempts?: number; lastSyncAttemptAt?: string; lastSyncErrorCode?: string;
 }
-export function validateCompletedSession(value: unknown): value is GoalFitCompletedSessionV1 {
-  const item = value as GoalFitCompletedSessionV1;
-  return Boolean(item && item.schemaVersion === 1 && item.id && item.result && item.scores && item.result.resultVersion && item.scores.scoreVersion);
-}
-function warn(error: unknown): void { if (import.meta.env.DEV) console.warn("[goal fit session] failed", error); }
-export function saveCompletedSession(session: GoalFitCompletedSessionV1): boolean {
-  if (!validateCompletedSession(session)) return false;
-  try { uni.setStorageSync(KEY, session); return true; } catch (error) { warn(error); return false; }
-}
-export function readCompletedSession(id: string): GoalFitCompletedSessionV1 | null {
-  try { const item = uni.getStorageSync(KEY); return validateCompletedSession(item) && item.id === id ? item : null; } catch (error) { warn(error); return null; }
-}
+function validOfficial(value: unknown): value is OfficialFreeResult { const item = value as OfficialFreeResult; return Boolean(item && typeof item.overallScore === "number" && item.overallConclusion && item.primaryRisk && Array.isArray(item.riskInsights) && Array.isArray(item.recommendations)); }
+export function validateCompletedSession(value: unknown): value is GoalFitCompletedSessionV1 { const item=value as GoalFitCompletedSessionV1; return Boolean(item && typeof item==="object" && item.id && item.targetCompany && item.targetRole && Array.isArray(item.selectedQuestionIds) && item.answers && typeof item.answers==="object" && item.completedAt && !Number.isNaN(Date.parse(item.completedAt)) && (!item.localFreeResult || validOfficial(item.localFreeResult)) && (!item.serverFreeResult || validOfficial(item.serverFreeResult)) && (!item.assessmentId || /^asm_/.test(item.assessmentId)) && (!item.reportSnapshotId || /^rpt_/.test(item.reportSnapshotId)) && (!item.versions || [item.versions.questionSetVersion,item.versions.scoringVersion,item.versions.reportVersion].every(x=>typeof x==="string"&&x.length>0))); }
+function warn(error: unknown): void { if (import.meta.env.DEV) console.warn("[goal fit session] storage unavailable", error); }
+export function saveCompletedSession(session: GoalFitCompletedSessionV1): boolean { if (!validateCompletedSession(session)) return false; try { uni.setStorageSync(KEY, session); return true; } catch (error) { warn(error); return false; } }
+export function readLatestCompletedSession(): GoalFitCompletedSessionV1 | null { try { const raw=uni.getStorageSync(KEY); const item=typeof raw==="string"?JSON.parse(raw):raw; if(!validateCompletedSession(item)){if(raw)uni.removeStorageSync(KEY);return null;} const legacy=item as GoalFitCompletedSessionV1; const localFreeResult=legacy.localFreeResult ?? (legacy.result ? {overallScore:legacy.result.scores.overallScore,overallConclusion:legacy.result.overallConclusion,primaryRisk:legacy.result.riskInsights[0],riskInsights:legacy.result.riskInsights,recommendations:legacy.result.recommendations} : undefined); const syncStatus=legacy.syncStatus==="syncing"?"pending":legacy.syncStatus??(legacy.assessmentId&&legacy.reportSnapshotId?"completed":localFreeResult?"pending":"local_only"); const normalized:GoalFitCompletedSessionV1={...legacy,schemaVersion:1 as const,localFreeResult,syncStatus}; if(JSON.stringify(normalized)!==JSON.stringify(item))saveCompletedSession(normalized); return normalized; } catch (error) { warn(error); try{uni.removeStorageSync(KEY)}catch{} return null; } }
+export function readCompletedSession(id: string): GoalFitCompletedSessionV1 | null { const item=readLatestCompletedSession(); return item && (item.id===id || item.assessmentId===id) ? item : null; }
+export function createSubmissionId(): string { return `sub_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,14)}`; }
+export function ensureSubmissionId(session: GoalFitCompletedSessionV1): GoalFitCompletedSessionV1 { if (session.submissionId) return session; const next={...session,submissionId:createSubmissionId(),syncStatus:session.syncStatus ?? "pending" as AssessmentSyncStatus}; saveCompletedSession(next); return next; }
+export function getDisplayFreeResult(session: GoalFitCompletedSessionV1): OfficialFreeResult | null { return session.serverFreeResult ?? session.localFreeResult ?? null; }
