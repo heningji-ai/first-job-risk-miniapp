@@ -45,6 +45,7 @@
     "test:assessment-latest-recovery": "node scripts/run-assessment-latest-recovery-test.cjs",
     "test:assessment-storage-compat": "node scripts/run-assessment-storage-compat-test.cjs",
     "test:assessment-stale-response": "node scripts/run-assessment-stale-response-test.cjs",
+    "test:assessment-integration": "node scripts/run-assessment-integration-test.cjs",
     "check:release:weixin": "node scripts/check-weixin-release.cjs",
     "check:release:xhs": "node scripts/check-xhs-release.cjs"
   },
