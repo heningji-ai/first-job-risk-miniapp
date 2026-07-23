@@ -1,0 +1,93 @@
+type RequestCall = { path: string; method?: string; data?: unknown; requiresMiniappAuth?: boolean };
+
+function assert(value: unknown, message: string): asserts value {
+  if (!value) throw new Error(message);
+}
+
+async function rejects(action: () => Promise<unknown>, code: string): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    assert(error instanceof Error && error.message === code, `expected ${code}`);
+    return;
+  }
+  throw new Error(`expected rejection ${code}`);
+}
+
+void (async () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const payment = require("../src/api/goal-fit-payment") as typeof import("../src/api/goal-fit-payment");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { request } = require("../src/api/request") as typeof import("../src/api/request");
+  const calls: RequestCall[] = [];
+  const prepareResponse = {
+    orderId: "order_123",
+    paymentAttemptId: "attempt_123",
+    mode: "short_series_goods" as const,
+    signData: '{"opaque":"keep-as-string"}',
+    paySig: "pay-sig",
+    signature: "signature",
+  };
+  let response: unknown = { ...prepareResponse, unexpected: "discard" };
+  const mockRequest = (async (options: RequestCall) => {
+    calls.push(options);
+    return response;
+  }) as typeof request;
+
+  payment.setGoalFitPaymentRequestClientForTest(mockRequest);
+  try {
+    const prepared = await payment.prepareGoalFitVirtualPayment("asm/a b", {
+      code: "temporary-code",
+      requestId: "request-1",
+    });
+    assert(prepared.signData === prepareResponse.signData, "signData must remain an opaque string");
+    assert(JSON.stringify(prepared) === JSON.stringify(prepareResponse), "prepare must discard unknown response fields");
+    assert(calls[0]?.path === "/api/miniapp/goal-fit/assessments/asm%2Fa%20b/virtual-payment-params", "prepare path must encode assessment id");
+    assert(calls[0]?.method === "POST" && calls[0]?.requiresMiniappAuth === true, "prepare must be authenticated POST");
+    assert(JSON.stringify(calls[0]?.data) === JSON.stringify({ code: "temporary-code", requestId: "request-1" }), "prepare body must only contain code and requestId");
+
+    for (const invalid of [
+      { ...prepareResponse, mode: "other" },
+      { ...prepareResponse, signData: "" },
+      { ...prepareResponse, paySig: "" },
+      { ...prepareResponse, signature: "" },
+    ]) {
+      response = invalid;
+      await rejects(() => payment.prepareGoalFitVirtualPayment("asm_1", { code: "code", requestId: "request" }), "INVALID_VIRTUAL_PAYMENT_RESPONSE");
+    }
+
+    for (const confirmation of [
+      { paymentAttemptId: "attempt_1", orderId: "order_1", status: "pending" as const, reportAvailable: false },
+      { paymentAttemptId: "attempt_1", orderId: "order_1", status: "paid" as const, reportAvailable: true },
+      { paymentAttemptId: "attempt_1", orderId: "order_1", status: "closed" as const, reportAvailable: false },
+      { paymentAttemptId: "attempt_1", orderId: "order_1", status: "review_required" as const, reportAvailable: false },
+    ]) {
+      response = confirmation;
+      assert((await payment.confirmGoalFitVirtualPayment("attempt/a b")).status === confirmation.status, "confirmation status must parse");
+    }
+    assert(calls.at(-1)?.path === "/api/miniapp/goal-fit/payment-attempts/attempt%2Fa%20b/confirm", "confirmation path must encode id");
+    assert(calls.at(-1)?.method === "POST" && JSON.stringify(calls.at(-1)?.data) === "{}", "confirmation body must be empty");
+    response = { paymentAttemptId: "attempt", orderId: "order", status: "unknown", reportAvailable: false };
+    await rejects(() => payment.confirmGoalFitVirtualPayment("attempt"), "INVALID_PAYMENT_CONFIRMATION_RESPONSE");
+    response = { paymentAttemptId: "attempt", orderId: "order", status: "paid", reportAvailable: false };
+    await rejects(() => payment.confirmGoalFitVirtualPayment("attempt"), "INVALID_PAYMENT_CONFIRMATION_RESPONSE");
+
+    response = { report: "server-only" };
+    assert((await payment.fetchGoalFitFullReport<{ report: string }>("asm/a b")).report === "server-only", "full report must pass through server response");
+    assert(calls.at(-1)?.path === "/api/miniapp/goal-fit/assessments/asm%2Fa%20b/full-report" && calls.at(-1)?.method === undefined, "full report must use encoded GET path");
+
+    const callCount = calls.length;
+    await rejects(() => payment.prepareGoalFitVirtualPayment("", { code: "code", requestId: "request" }), "INVALID_VIRTUAL_PAYMENT_RESPONSE");
+    await rejects(() => payment.prepareGoalFitVirtualPayment("asm", { code: "", requestId: "request" }), "INVALID_VIRTUAL_PAYMENT_RESPONSE");
+    await rejects(() => payment.confirmGoalFitVirtualPayment(""), "INVALID_PAYMENT_CONFIRMATION_RESPONSE");
+    await rejects(() => payment.fetchGoalFitFullReport(""), "INVALID_FULL_REPORT_RESPONSE");
+    assert(calls.length === callCount, "invalid input must not call the request layer");
+  } finally {
+    payment.setGoalFitPaymentRequestClientForTest();
+  }
+
+  console.log("Goal Fit virtual payment API client tests passed.");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -38,6 +38,7 @@
     "test:goal-fit-domain": "node scripts/run-goal-fit-domain-test.cjs",
     "test:assessment-flow": "node scripts/run-assessment-flow-test.cjs",
     "test:miniapp-session": "node scripts/run-miniapp-session-test.cjs",
+    "test:goal-fit-payment-api": "node scripts/run-goal-fit-payment-api-test.cjs",
     "test:assessment-sync": "node scripts/run-assessment-sync-test.cjs",
     "test:assessment-sync-network": "node scripts/run-assessment-sync-network-test.cjs",
     "test:assessment-sync-resilience": "node scripts/run-assessment-sync-resilience-test.cjs",
