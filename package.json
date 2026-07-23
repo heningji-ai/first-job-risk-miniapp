@@ -42,6 +42,7 @@
     "test:goal-fit-pending-payment": "node scripts/run-goal-fit-pending-payment-test.cjs",
     "test:wechat-virtual-payment": "node scripts/run-wechat-virtual-payment-test.cjs",
     "test:goal-fit-virtual-payment-flow": "node scripts/run-goal-fit-virtual-payment-flow-test.cjs",
+    "test:goal-fit-virtual-payment-controller": "node scripts/run-goal-fit-virtual-payment-controller-test.cjs",
     "test:assessment-sync": "node scripts/run-assessment-sync-test.cjs",
     "test:assessment-sync-network": "node scripts/run-assessment-sync-network-test.cjs",
     "test:assessment-sync-resilience": "node scripts/run-assessment-sync-resilience-test.cjs",
