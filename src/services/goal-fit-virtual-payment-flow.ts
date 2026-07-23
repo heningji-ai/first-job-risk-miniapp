@@ -26,7 +26,7 @@ export type GoalFitVirtualPaymentFlowSafeCode =
   | "INVALID_PAYMENT_PARAMS" | "CANCELLED" | "SESSION_KEY_EXPIRED" | "RATE_LIMITED"
   | "CONFIGURATION_ERROR" | "RISK_BLOCKED" | "PAYMENT_FAILED" | "CONFIRMATION_PENDING"
   | "CONFIRMATION_FAILED" | "CLOSED" | "REVIEW_REQUIRED" | "FULL_REPORT_UNAVAILABLE"
-  | "PAYMENT_FLOW_STALE";
+  | "PAYMENT_FLOW_STALE" | "MINIAPP_AUTH_REQUIRED" | "MINIAPP_SESSION_EXPIRED";
 
 export type GoalFitVirtualPaymentFlowResult<TReport = unknown> = {
   status: GoalFitVirtualPaymentFlowStatus;
@@ -113,7 +113,7 @@ function stale<TReport>(assessmentId: string): GoalFitVirtualPaymentFlowResult<T
   return result("failed", assessmentId, { safeCode: "PAYMENT_FLOW_STALE" });
 }
 
-async function poll<TReport>(assessmentId: string, paymentAttemptId: string, dependencies: GoalFitVirtualPaymentFlowDependencies<TReport>): Promise<GoalFitVirtualPaymentFlowResult<TReport>> {
+export async function confirmAndLoadGoalFitVirtualPayment<TReport>(assessmentId: string, paymentAttemptId: string, dependencies: GoalFitVirtualPaymentFlowDependencies<TReport>): Promise<GoalFitVirtualPaymentFlowResult<TReport>> {
   dependencies.onStateChange("confirming");
   for (const [index, delay] of GOAL_FIT_VIRTUAL_PAYMENT_CONFIRM_DELAYS_MS.entries()) {
     if (delay > 0) await dependencies.delayFn(delay);
@@ -167,11 +167,11 @@ export async function startGoalFitVirtualPaymentFlow<TReport = unknown>(options:
   } catch (error) {
     if (!dependencies.isFlowActive()) return stale(assessmentId);
     const kind = failureKind(error) ?? "failed";
-    if (kind === "uncertain") return poll(assessmentId, prepared.paymentAttemptId, dependencies);
+    if (kind === "uncertain") return confirmAndLoadGoalFitVirtualPayment(assessmentId, prepared.paymentAttemptId, dependencies);
     const failed = safeFailure<TReport>(assessmentId, kind);
     dependencies.clearPending();
     return failed;
   }
   if (!dependencies.isFlowActive()) return stale(assessmentId);
-  return poll(assessmentId, prepared.paymentAttemptId, dependencies);
+  return confirmAndLoadGoalFitVirtualPayment(assessmentId, prepared.paymentAttemptId, dependencies);
 }

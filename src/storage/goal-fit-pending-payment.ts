@@ -96,3 +96,13 @@ export function getPendingGoalFitPaymentConfirmation(
 export function clearPendingGoalFitPaymentConfirmation(): void {
   clearSafely();
 }
+
+export function clearPendingGoalFitPaymentConfirmationIfMatches(input: {
+  assessmentId: string;
+  paymentAttemptId: string;
+}): boolean {
+  const current = getPendingGoalFitPaymentConfirmation();
+  if (!current || current.assessmentId !== input.assessmentId || current.paymentAttemptId !== input.paymentAttemptId) return false;
+  clearSafely();
+  return true;
+}
