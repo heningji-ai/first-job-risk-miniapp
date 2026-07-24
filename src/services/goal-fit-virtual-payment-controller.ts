@@ -4,6 +4,7 @@ import {
   type GoalFitVirtualPaymentFlowResult,
   type GoalFitVirtualPaymentFlowStatus,
 } from "@/services/goal-fit-virtual-payment-flow";
+import { resumeGoalFitVirtualPaymentConfirmation } from "@/services/goal-fit-virtual-payment-resume";
 
 export interface GoalFitVirtualPaymentState {
   status: GoalFitVirtualPaymentFlowStatus | "idle";
@@ -100,6 +101,35 @@ export function startManagedGoalFitVirtualPayment<TReport = unknown>(options: {
     const value = { status: "failed", assessmentId: options.assessmentId, safeCode: "PAYMENT_FAILED" } as GoalFitVirtualPaymentFlowResult<TReport>;
     emit(safeState(value));
     return value;
+  });
+  return holder.promise as Promise<GoalFitVirtualPaymentFlowResult<TReport>>;
+}
+
+export function resumeManagedGoalFitVirtualPaymentConfirmation<TReport = unknown>(options: {
+  assessmentId: string;
+  resumeRunner?: (input: { assessmentId: string; dependencies: Partial<GoalFitVirtualPaymentFlowDependencies<TReport>> }) => Promise<GoalFitVirtualPaymentFlowResult<TReport> | null>;
+}): Promise<GoalFitVirtualPaymentFlowResult<TReport> | null> {
+  if (!validAssessmentId(options.assessmentId)) return Promise.resolve(null);
+  if (active?.assessmentId === options.assessmentId && !active.invalidated) return active.promise as Promise<GoalFitVirtualPaymentFlowResult<TReport>>;
+  if (active) invalidateGoalFitVirtualPaymentFlow();
+  const flowId = newFlowId();
+  const dependencies: Partial<GoalFitVirtualPaymentFlowDependencies<TReport>> = {
+    isFlowActive: () => activeFor(flowId, options.assessmentId),
+    onStateChange: (status) => { if (activeFor(flowId, options.assessmentId)) emit({ status, assessmentId: options.assessmentId, busy: true, canRetry: false }); },
+  };
+  const holder = { flowId, assessmentId: options.assessmentId, invalidated: false, promise: Promise.resolve({ status: "failed", assessmentId: options.assessmentId } as GoalFitVirtualPaymentFlowResult) };
+  active = holder;
+  emit({ status: "confirming", assessmentId: options.assessmentId, busy: true, canRetry: false });
+  const runner = options.resumeRunner ?? ((input) => resumeGoalFitVirtualPaymentConfirmation(input));
+  holder.promise = runner({ assessmentId: options.assessmentId, dependencies }).then((value) => {
+    if (!activeFor(flowId, options.assessmentId)) return { status: "failed", assessmentId: options.assessmentId, safeCode: "PAYMENT_FLOW_STALE" } as GoalFitVirtualPaymentFlowResult<TReport>;
+    active = null;
+    if (value === null) emit({ status: "idle", busy: false, canRetry: true });
+    else emit(safeState(value));
+    return value as GoalFitVirtualPaymentFlowResult<TReport>;
+  }, () => {
+    if (!activeFor(flowId, options.assessmentId)) return { status: "failed", assessmentId: options.assessmentId, safeCode: "PAYMENT_FLOW_STALE" } as GoalFitVirtualPaymentFlowResult<TReport>;
+    active = null; const value = { status: "failed", assessmentId: options.assessmentId, safeCode: "CONFIRMATION_FAILED" } as GoalFitVirtualPaymentFlowResult<TReport>; emit(safeState(value)); return value;
   });
   return holder.promise as Promise<GoalFitVirtualPaymentFlowResult<TReport>>;
 }

@@ -32,6 +32,13 @@ void (async () => {
     controller.startManagedGoalFitVirtualPayment({ assessmentId: "asm_d", flowRunner: runner });
     assert(states.length === count, "unsubscribe is idempotent");
     controller.invalidateGoalFitVirtualPaymentFlow(); deferred[3]?.resolve({ status: "failed", assessmentId: "asm_d" });
+    let resumeCalls = 0; let resumeResolve: (value: any) => void = () => undefined;
+    const resumeRunner = () => new Promise<any>((resolve) => { resumeCalls += 1; resumeResolve = resolve; });
+    const resumed = controller.resumeManagedGoalFitVirtualPaymentConfirmation({ assessmentId: "asm_resume", resumeRunner });
+    const resumedAgain = controller.resumeManagedGoalFitVirtualPaymentConfirmation({ assessmentId: "asm_resume", resumeRunner });
+    assert(resumed === resumedAgain && resumeCalls === 1, "same assessment resume reuses one promise");
+    resumeResolve(null);
+    assert(await resumed === null && controller.getActiveGoalFitVirtualPaymentState().status === "idle", "no pending resume returns idle");
   } finally { controller.invalidateGoalFitVirtualPaymentFlow(); }
   console.log("Goal Fit virtual payment controller tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

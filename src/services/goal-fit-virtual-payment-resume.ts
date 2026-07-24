@@ -20,6 +20,7 @@ export async function resumeGoalFitVirtualPaymentConfirmation<TReport = unknown>
     isFlowActive: () => true, onStateChange: () => undefined,
     ...options.dependencies,
   };
+  if (!deps.isFlowActive()) return { status: "failed", assessmentId: options.assessmentId, safeCode: "PAYMENT_FLOW_STALE" };
   try {
     return await confirmAndLoadGoalFitVirtualPayment(options.assessmentId, record.paymentAttemptId, deps);
   } catch (error) {
