@@ -40,6 +40,9 @@ void (async () => {
     const reportFailure = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), fetchFullReport: async () => { throw new Error("temporary"); } } });
     assert(reportFailure.status === "failed" && reportFailure.safeCode === "FULL_REPORT_UNAVAILABLE" && clears.length === 0, "report failure retains pending");
     calls.length = clears.length = 0;
+    const alreadyPurchased = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), preparePayment: async () => { throw new Error("ALREADY_PURCHASED"); } } });
+    assert(alreadyPurchased.status === "paid" && alreadyPurchased.report && calls.includes("report") && !calls.includes("invoke"), "ALREADY_PURCHASED recovers the authoritative report without invoking payment");
+    calls.length = clears.length = 0;
     let active = true;
     const stale = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), isFlowActive: () => active, fetchFullReport: async () => { active = false; return { secret: "old" }; } } });
     assert(stale.safeCode === "PAYMENT_FLOW_STALE" && clears.length === 0, "stale response cannot clear a newer pending record");

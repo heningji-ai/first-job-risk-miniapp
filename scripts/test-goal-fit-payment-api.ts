@@ -28,6 +28,12 @@ void (async () => {
     paySig: "pay-sig",
     signature: "signature",
   };
+  const fullReport = {
+    targetCompany: "D", targetRole: "PM", targetCompanyLabel: "大厂", targetRoleLabel: "产品",
+    scores: { overallScore: 80 }, overallConclusion: { title: "适配", summary: "说明" },
+    companyQuadrant: { title: "公司", summary: "说明", advice: "建议" }, roleQuadrant: { title: "岗位", summary: "说明", advice: "建议" },
+    riskInsights: [], headhunterSummary: "建议", recommendations: [], cards: [], resultVersion: "v1",
+  };
   let response: unknown = { ...prepareResponse, unexpected: "discard" };
   const mockRequest = (async (options: RequestCall) => {
     calls.push(options);
@@ -72,9 +78,13 @@ void (async () => {
     response = { paymentAttemptId: "attempt", orderId: "order", status: "paid", reportAvailable: false };
     await rejects(() => payment.confirmGoalFitVirtualPayment("attempt"), "INVALID_PAYMENT_CONFIRMATION_RESPONSE");
 
-    response = { report: "server-only" };
-    assert((await payment.fetchGoalFitFullReport<{ report: string }>("asm/a b")).report === "server-only", "full report must pass through server response");
+    response = { assessmentId: "asm/a b", reportSnapshotId: "rpt_1", fullReport };
+    assert((await payment.fetchGoalFitFullReport("asm/a b")).fullReport === fullReport, "full report response must preserve the server wrapper");
     assert(calls.at(-1)?.path === "/api/miniapp/goal-fit/assessments/asm%2Fa%20b/full-report" && calls.at(-1)?.method === undefined, "full report must use encoded GET path");
+
+    response = { purchase: { assessmentId: "asm_1", reportSnapshotId: "rpt_1", fullReport } };
+    assert((await payment.fetchLatestGoalFitPurchase()).purchase?.assessmentId === "asm_1", "latest purchase must preserve active entitlement report");
+    assert(calls.at(-1)?.path === "/api/miniapp/goal-fit/purchases/latest", "latest purchase must use the protected recovery endpoint");
 
     const callCount = calls.length;
     await rejects(() => payment.prepareGoalFitVirtualPayment("", { code: "code", requestId: "request" }), "INVALID_VIRTUAL_PAYMENT_RESPONSE");

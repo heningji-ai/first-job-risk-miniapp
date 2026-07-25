@@ -7,7 +7,7 @@ export type OfficialFreeResult = { overallScore: number; overallConclusion: Goal
 export interface GoalFitCompletedSessionV1 {
   schemaVersion: 1; id: string; targetCompany: CompanyType; targetRole: RoleType; selectedQuestionIds: string[]; answers: GoalFitAnswerMap;
   scores?: GoalFitScoreResult; result?: GoalFitResult; createdAt: string; completedAt: string;
-  submissionId?: string; localFreeResult?: OfficialFreeResult; serverFreeResult?: OfficialFreeResult; assessmentId?: string; reportSnapshotId?: string; versions?: AssessmentVersions;
+  submissionId?: string; localFreeResult?: OfficialFreeResult; serverFreeResult?: OfficialFreeResult; fullReport?: GoalFitResult; assessmentId?: string; reportSnapshotId?: string; versions?: AssessmentVersions;
   syncStatus?: AssessmentSyncStatus; syncAttempts?: number; lastSyncAttemptAt?: string; lastSyncErrorCode?: string;
 }
 function validOfficial(value: unknown): value is OfficialFreeResult { const item = value as OfficialFreeResult; return Boolean(item && typeof item.overallScore === "number" && item.overallConclusion && item.primaryRisk && Array.isArray(item.riskInsights) && Array.isArray(item.recommendations)); }

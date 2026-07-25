@@ -9,6 +9,12 @@ const freeResult = {
   riskInsights: [{ title: "risk", description: "risk" }],
   recommendations: [{ title: "action", description: "action" }],
 };
+const fullReport = {
+  targetCompany: "D", targetRole: "PM", targetCompanyLabel: "大厂", targetRoleLabel: "产品",
+  scores: { overallScore: 80 }, overallConclusion: freeResult.overallConclusion,
+  companyQuadrant: { title: "公司", summary: "说明", advice: "建议" }, roleQuadrant: { title: "岗位", summary: "说明", advice: "建议" },
+  riskInsights: [], headhunterSummary: "建议", recommendations: [], cards: [], resultVersion: "v1",
+};
 const answers = Object.fromEntries(Array.from({ length: 34 }, (_, index) => [`Q${index}`, "O1"]));
 
 const { setAssessmentSyncDepsForTest, syncCompletedAssessment } = require("@/services/assessment-sync") as typeof import("@/services/assessment-sync");
@@ -70,7 +76,7 @@ async function main(): Promise<void> {
           signature: "opaque-signature",
         };
       }
-      return { sections: [] };
+      return { assessmentId: officialAssessmentId, reportSnapshotId: "rpt_server_test_1234567890", fullReport };
     });
 
     await prepareGoalFitVirtualPayment(synced!.assessmentId!, { code: "code", requestId: "request" });

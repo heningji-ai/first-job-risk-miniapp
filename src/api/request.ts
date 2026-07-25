@@ -41,9 +41,13 @@ export function request<TResponse, TData = Record<string, never>>(
           resolve(response.data as TResponse);
           return;
         }
-        const serverMessage = (response.data as { message?: unknown } | undefined)?.message;
+        const errorBody = response.data as { message?: unknown; error?: unknown } | undefined;
+        const serverMessage = errorBody?.message;
+        const serverError = errorBody?.error;
         const message = typeof serverMessage === "string" && serverMessage.trim()
           ? serverMessage
+          : typeof serverError === "string" && serverError.trim()
+            ? serverError
           : `请求失败（HTTP ${response.statusCode}）`;
         reject(new ApiError(message, { statusCode: response.statusCode }));
       },

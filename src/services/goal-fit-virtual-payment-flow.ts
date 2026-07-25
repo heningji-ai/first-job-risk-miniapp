@@ -157,7 +157,15 @@ export async function startGoalFitVirtualPaymentFlow<TReport = unknown>(options:
   try { code = await dependencies.loginCodeProvider(); } catch { return result("failed", assessmentId, { safeCode: "LOGIN_FAILED" }); }
   if (!dependencies.isFlowActive()) return stale(assessmentId);
   let prepared: GoalFitVirtualPaymentParams;
-  try { prepared = await dependencies.preparePayment(assessmentId, { code, requestId: options.requestId ?? dependencies.requestIdFactory() }); } catch { return result("failed", assessmentId, { safeCode: "PREPARE_FAILED" }); }
+  try { prepared = await dependencies.preparePayment(assessmentId, { code, requestId: options.requestId ?? dependencies.requestIdFactory() }); } catch (error) {
+    if ((error as Error)?.message === "ALREADY_PURCHASED") {
+      try {
+        const report = await dependencies.fetchFullReport(assessmentId);
+        return result("paid", assessmentId, { report });
+      } catch { return result("failed", assessmentId, { safeCode: "FULL_REPORT_UNAVAILABLE" }); }
+    }
+    return result("failed", assessmentId, { safeCode: "PREPARE_FAILED" });
+  }
   if (!dependencies.isFlowActive()) return stale(assessmentId);
   dependencies.savePending({ assessmentId, paymentAttemptId: prepared.paymentAttemptId, createdAt: dependencies.now() });
   if (!dependencies.isFlowActive()) return stale(assessmentId);

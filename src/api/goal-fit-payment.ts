@@ -1,4 +1,5 @@
 import { ApiError, request } from "@/api/request";
+import type { GoalFitResult } from "@/domain/goal-fit/types";
 
 type PaymentRequestClient = typeof request;
 
@@ -18,6 +19,14 @@ export type GoalFitPaymentConfirmation = {
   reportAvailable: boolean;
   assessmentId?: string;
 };
+
+export type GoalFitFullReportResponse = {
+  assessmentId: string;
+  reportSnapshotId: string;
+  fullReport: GoalFitResult;
+};
+
+export type LatestGoalFitPurchaseResponse = { purchase: GoalFitFullReportResponse | null };
 
 type PaymentContractErrorCode =
   | "INVALID_VIRTUAL_PAYMENT_RESPONSE"
@@ -119,15 +128,39 @@ export async function confirmGoalFitVirtualPayment(
   };
 }
 
-export async function fetchGoalFitFullReport<T = unknown>(assessmentId: string): Promise<T> {
+function isFullReportResponse(value: unknown): value is GoalFitFullReportResponse {
+  const item = value as Partial<GoalFitFullReportResponse>;
+  return isNonEmptyString(item?.assessmentId)
+    && isNonEmptyString(item.reportSnapshotId)
+    && Boolean(item.fullReport && typeof item.fullReport === "object"
+      && typeof item.fullReport.scores?.overallScore === "number"
+      && isNonEmptyString(item.fullReport.overallConclusion?.title)
+      && Array.isArray(item.fullReport.riskInsights)
+      && Array.isArray(item.fullReport.recommendations)
+      && Array.isArray(item.fullReport.cards));
+}
+
+export async function fetchGoalFitFullReport(assessmentId: string): Promise<GoalFitFullReportResponse> {
   const response = await paymentRequestClient<unknown>({
     path: `/api/miniapp/goal-fit/assessments/${encodeRequiredId(assessmentId, "INVALID_FULL_REPORT_RESPONSE")}/full-report`,
     requiresMiniappAuth: true,
   });
 
-  if (response === null || typeof response !== "object") {
+  if (!isFullReportResponse(response)) {
     throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
   }
 
-  return response as T;
+  return response;
+}
+
+export async function fetchLatestGoalFitPurchase(): Promise<LatestGoalFitPurchaseResponse> {
+  const response = await paymentRequestClient<unknown>({
+    path: "/api/miniapp/goal-fit/purchases/latest",
+    requiresMiniappAuth: true,
+  });
+  const value = response as Partial<LatestGoalFitPurchaseResponse>;
+  if (value.purchase !== null && !isFullReportResponse(value.purchase)) {
+    throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
+  }
+  return { purchase: value.purchase ?? null };
 }
