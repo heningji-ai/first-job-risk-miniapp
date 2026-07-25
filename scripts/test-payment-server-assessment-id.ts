@@ -1,0 +1,2 @@
+const fs=require("node:fs");const source=fs.readFileSync("src/pages/free-result/index.vue","utf8");function assert(v:unknown,m:string):asserts v{if(!v)throw new Error(m)}
+assert(source.includes('session?.assessmentId?.startsWith("asm_")?session.assessmentId:""'),"page must only use server asm_ assessmentId");assert(!source.includes("session?.assessmentId??session?.id"),"page must not fall back to local session id");assert(!source.includes("assessment_"),"page must not use local assessment id for payment");console.log("Server assessment ID payment regression tests passed.");
