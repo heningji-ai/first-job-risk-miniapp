@@ -20,6 +20,10 @@
       "path": "pages/free-result/index",
       "style": { "navigationBarTitleText": "免费结果" }
     }
+    ,{
+      "path": "pages/my-reports/index",
+      "style": { "navigationBarTitleText": "我的报告" }
+    }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",

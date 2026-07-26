@@ -45,6 +45,8 @@
     "test:goal-fit-virtual-payment-controller": "node scripts/run-goal-fit-virtual-payment-controller-test.cjs",
     "test:goal-fit-virtual-payment-resume": "node scripts/run-goal-fit-virtual-payment-resume-test.cjs",
     "test:free-result-virtual-payment": "node scripts/run-free-result-virtual-payment-test.cjs",
+    "test:goal-fit-purchases": "node scripts/run-goal-fit-purchases-test.cjs",
+    "test:my-reports": "node scripts/run-my-reports-test.cjs",
     "test:payment-server-assessment-id": "node scripts/run-payment-server-assessment-id-test.cjs",
     "test:assessment-sync": "node scripts/run-assessment-sync-test.cjs",
     "test:assessment-sync-network": "node scripts/run-assessment-sync-network-test.cjs",

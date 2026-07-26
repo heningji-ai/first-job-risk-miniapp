@@ -1,7 +1,7 @@
 import { ApiError, request } from "@/api/request";
 import type { GoalFitResult } from "@/domain/goal-fit/types";
-import type { GoalFitApiError, GoalFitFreeResultResponse, GoalFitFullReportResponse } from "@/types/goal-fit-report-conversion";
-export type { GoalFitFullReportResponse, GoalFitFreeResultResponse } from "@/types/goal-fit-report-conversion";
+import type { GoalFitApiError, GoalFitFreeResultResponse, GoalFitFullReportResponse, GoalFitPurchaseListItem, GoalFitPurchaseListResponse } from "@/types/goal-fit-report-conversion";
+export type { GoalFitFullReportResponse, GoalFitFreeResultResponse, GoalFitPurchaseListItem, GoalFitPurchaseListResponse } from "@/types/goal-fit-report-conversion";
 
 type PaymentRequestClient = typeof request;
 
@@ -45,6 +45,31 @@ export function setGoalFitPaymentRequestClientForTest(client?: PaymentRequestCli
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isOfficialAssessmentId(value: unknown): value is string {
+  return typeof value === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(value);
+}
+
+function isOptionalString(value: unknown): value is string | null {
+  return value === null || isNonEmptyString(value);
+}
+
+function isPurchaseListItem(value: unknown): value is GoalFitPurchaseListItem {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return isOfficialAssessmentId(item.assessmentId)
+    && isNonEmptyString(item.reportSnapshotId)
+    && isNonEmptyString(item.reportType)
+    && isOptionalString(item.reportTypeTitle)
+    && isNonEmptyString(item.companyType)
+    && isNonEmptyString(item.roleName)
+    && isNonEmptyString(item.completedAt)
+    && !Number.isNaN(Date.parse(item.completedAt))
+    && isOptionalString(item.primaryConclusion)
+    && item.unlocked === true
+    && isOptionalString(item.copyVersion)
+    && isOptionalString(item.mappingVersion);
 }
 
 function encodeRequiredId(value: string, code: PaymentContractErrorCode): string {
@@ -173,4 +198,20 @@ export async function fetchLatestGoalFitPurchase(): Promise<LatestGoalFitPurchas
     throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
   }
   return { purchase: value.purchase ?? null };
+}
+
+/** Lists only reports that the server has already marked as unlocked for this identity. */
+export async function fetchGoalFitPurchases(): Promise<GoalFitPurchaseListResponse> {
+  const response = await paymentRequestClient<unknown>({
+    path: "/api/miniapp/goal-fit/purchases",
+    requiresMiniappAuth: true,
+  });
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
+  }
+  const purchases = (response as Record<string, unknown>).purchases;
+  if (!Array.isArray(purchases) || !purchases.every(isPurchaseListItem)) {
+    throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
+  }
+  return { purchases };
 }

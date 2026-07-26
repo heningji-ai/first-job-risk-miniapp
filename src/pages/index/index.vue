@@ -27,6 +27,10 @@ function start(): void {
   void trackEvent("test_start");
   uni.navigateTo({ url: "/pages/test-entry/index" });
 }
+
+function openMyReports(): void {
+  uni.navigateTo({ url: "/pages/my-reports/index" });
+}
 </script>
 
 <template>
@@ -38,6 +42,7 @@ function start(): void {
       <view class="status"><text>当前平台</text><text>{{ platform }}</text></view>
       <view class="status"><text>价格接口</text><text>{{ pricingStatus }}</text></view>
       <button class="primary" @click="start">开始预演</button>
+      <button class="secondary" @click="openMyReports">我的报告</button>
     </view>
   </view>
 </template>
@@ -51,4 +56,5 @@ function start(): void {
 .description { margin: 24rpx 0 44rpx; color: #62697a; font-size: 30rpx; line-height: 1.65; }
 .status { display: flex; justify-content: space-between; padding: 22rpx 0; border-top: 1rpx solid #edf0f6; color: #52596a; font-size: 28rpx; }
 .primary { margin-top: 44rpx; background: #4057d6; color: #fff; border-radius: 14rpx; }
+.secondary { margin-top: 18rpx; color: #4057d6; background: #eef1ff; border-radius: 14rpx; }
 </style>
