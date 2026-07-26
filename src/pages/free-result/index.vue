@@ -6,21 +6,308 @@ import { getPlatform } from "@/platform";
 import { getDisplayFreeResult, readCompletedSession, readLatestCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
 import { recoverLatestAssessment, retryPendingAssessmentSync } from "@/services/assessment-sync";
 import { getActiveGoalFitVirtualPaymentState, invalidateGoalFitVirtualPaymentFlow, resumeManagedGoalFitVirtualPaymentConfirmation, startManagedGoalFitVirtualPayment, subscribeGoalFitVirtualPaymentState, type GoalFitVirtualPaymentState } from "@/services/goal-fit-virtual-payment-controller";
-import { hasReportConversion, type GoalFitReportConversion, type GoalFitReportValueProof } from "@/types/goal-fit-report-conversion";
+import { hasReportConversion, type GoalFitReportConversion, type GoalFitReportValueProof, type GoalFitSelectedRiskPreview } from "@/types/goal-fit-report-conversion";
 import { trackEvent } from "@/analytics";
 import { clearGoalFitHistoryReportRecovery, readGoalFitHistoryReportRecovery, saveGoalFitHistoryReportRecovery } from "@/storage/goal-fit-history-report";
-const result=ref<OfficialFreeResult|null>(null), proof=ref<GoalFitReportValueProof|null>(null), report=ref<GoalFitFullReportResponse|null>(null), assessmentId=ref(""), error=ref(""), access=ref<GoalFitReportAccessState>("LOCKED"), payment=ref<GoalFitVirtualPaymentState>(getActiveGoalFitVirtualPaymentState()), expanded=ref(0), historyMode=ref(false), historyEntitlementUncertain=ref(false); let session:GoalFitCompletedSessionV1|null=null,active=true,unsub:(()=>void)|undefined,autoRetries=0;
-const conversion=computed<GoalFitReportConversion|null>(()=>report.value&&hasReportConversion(report.value.fullReport)?report.value.fullReport.reportConversion:null);
-const canPay=computed(()=>!historyMode.value&&getPlatform()==="wechat_miniapp"&&access.value==="LOCKED"&&!!proof.value&&!!assessmentId.value);
-function save(){if(session){session={...session,assessmentId:assessmentId.value,reportSnapshotId:report.value?.reportSnapshotId??session.reportSnapshotId,fullReport:report.value?.fullReport??session.fullReport,serverFreeResult:result.value?{...result.value, ...(proof.value?{reportValueProof:proof.value}:{})}:session.serverFreeResult,reportAccessState:access.value,reportRecoveryPending:access.value==="ENTITLED_TEMPORARY_UNAVAILABLE",syncStatus:"completed"};saveCompletedSession(session)}}
-function setUnlocked(value:GoalFitFullReportResponse){if(!active||value.assessmentId!==assessmentId.value)return;report.value=value;access.value=hasReportConversion(value.fullReport)?"UNLOCKED_V2":"UNLOCKED_LEGACY";historyEntitlementUncertain.value=false;if(historyMode.value)clearGoalFitHistoryReportRecovery(value.assessmentId);save();void trackEvent("goal_fit_report_fetch_success",{metadata:{reportFormat:access.value,riskModuleCount:conversion.value?.selectedRiskModules.length??0}})}
-async function readReport(recovery=false){if(!assessmentId.value)return;const requestedId=assessmentId.value;access.value="ENTITLED_LOADING";save();try{setUnlocked(await fetchGoalFitFullReport(requestedId));if(recovery)void trackEvent("goal_fit_report_recovery_success",{metadata:{recovery:true}})}catch(e){if(!active||assessmentId.value!==requestedId)return;const temporary=e instanceof GoalFitReportAccessError&&e.code==="FULL_REPORT_TEMPORARY_UNAVAILABLE";historyEntitlementUncertain.value=e instanceof GoalFitReportAccessError&&e.code==="FULL_REPORT_NOT_ENTITLED"&&historyMode.value;access.value="ENTITLED_TEMPORARY_UNAVAILABLE";if(historyMode.value)saveGoalFitHistoryReportRecovery({assessmentId:requestedId,recoveryPending:true});save();void trackEvent("goal_fit_report_fetch_temporary_unavailable",{metadata:{recovery,temporary}})}}
-async function load(id:string){session=id?readCompletedSession(id):readLatestCompletedSession();if(!session)session=await recoverLatestAssessment();else if(!session.assessmentId){await retryPendingAssessmentSync();session=id?readCompletedSession(id):readLatestCompletedSession()}result.value=session?getDisplayFreeResult(session):null;assessmentId.value=session?.assessmentId?.startsWith("asm_")?session.assessmentId:"";proof.value=(session?.serverFreeResult as any)?.reportValueProof??null;access.value=session?.reportAccessState??"LOCKED";if(assessmentId.value&&proof.value===null)try{const free=await fetchGoalFitFreeResult(assessmentId.value);result.value=free.freeResult;proof.value=free.freeResult.reportValueProof??null;save()}catch{}if(session?.fullReport&&assessmentId.value)setUnlocked({assessmentId:assessmentId.value,reportSnapshotId:session.reportSnapshotId??"",fullReport:session.fullReport});else if(assessmentId.value&&(session?.reportRecoveryPending||access.value!=="LOCKED"))await readReport(true);if(!result.value&&getPlatform()==="wechat_miniapp")try{const latest=await fetchLatestGoalFitPurchase();if(latest.purchase){assessmentId.value=latest.purchase.assessmentId;setUnlocked(latest.purchase)}}catch{}if(!result.value)error.value="结果暂不可用，请重新开始测试。";if(proof.value)void trackEvent("goal_fit_report_value_proof_view",{metadata:{reportType:proof.value.reportType,mappingVersion:proof.value.mappingVersion,riskModuleCount:proof.value.selectedRiskModules.length}})}
-async function loadHistory(id:string){historyMode.value=true;historyEntitlementUncertain.value=false;session=null;assessmentId.value=id;report.value=null;result.value=null;proof.value=null;access.value="ENTITLED_LOADING";saveGoalFitHistoryReportRecovery({assessmentId:id,recoveryPending:false});try{const free=await fetchGoalFitFreeResult(id);if(!active||assessmentId.value!==id)return;result.value=free.freeResult;proof.value=free.freeResult.reportValueProof??null}catch{if(!active||assessmentId.value!==id)return;error.value="报告权益状态暂时无法确认，请重新加载。"}await readReport(true);void trackEvent("goal_fit_report_detail_view",{metadata:{recovery:true}})}
-async function unlock(){if(!canPay.value||payment.value.busy)return;void trackEvent("goal_fit_report_unlock_click",{metadata:{reportType:proof.value?.reportType,mappingVersion:proof.value?.mappingVersion,riskModuleCount:proof.value?.selectedRiskModules.length}});access.value="PREPARING_PAYMENT";const out=await startManagedGoalFitVirtualPayment({assessmentId:assessmentId.value});if(out.status==="paid"){access.value="ENTITLED_LOADING";save();void trackEvent("goal_fit_payment_confirmed",{metadata:{reportType:proof.value?.reportType}});if(out.report)setUnlocked(out.report as GoalFitFullReportResponse);else await readReport()}else if(out.status==="cancelled"||out.status==="closed")access.value="PAYMENT_CANCELLED";else if(out.status==="pending")access.value="CONFIRMING_PAYMENT";else access.value="PAYMENT_FAILED";save()}
-async function resume(){if(!assessmentId.value||getPlatform()!=="wechat_miniapp")return;const out=await resumeManagedGoalFitVirtualPaymentConfirmation({assessmentId:assessmentId.value});if(out?.status==="paid"){access.value="ENTITLED_LOADING";save();if(out.report)setUnlocked(out.report as GoalFitFullReportResponse);else await readReport(true)}}
-function state(s:GoalFitVirtualPaymentState){if(!active||(s.assessmentId&&s.assessmentId!==assessmentId.value))return;payment.value=s;if(s.status==="preparing")access.value="PREPARING_PAYMENT";if(s.status==="invoking")access.value="INVOKING_PAYMENT";if(s.status==="confirming")access.value="CONFIRMING_PAYMENT"}
-onLoad(q=>{unsub=subscribeGoalFitVirtualPaymentState(state);const requested=typeof q?.assessmentId==="string"&&/^asm_[A-Za-z0-9_-]{8,}$/.test(q.assessmentId)?q.assessmentId:"";const recovery=!requested&&!readLatestCompletedSession()?readGoalFitHistoryReportRecovery():null;if(requested||recovery)void loadHistory(requested||recovery!.assessmentId);else void load(typeof q?.sessionId==="string"?q.sessionId:"").then(resume)});onShow(()=>{if(historyMode.value){if(access.value==="ENTITLED_TEMPORARY_UNAVAILABLE"&&autoRetries++<1)void readReport(true);return}if(access.value==="ENTITLED_TEMPORARY_UNAVAILABLE"&&autoRetries++<1)void readReport(true);else void resume()});onUnload(()=>{active=false;unsub?.();if(assessmentId.value)invalidateGoalFitVirtualPaymentFlow({assessmentId:assessmentId.value})});function home(){uni.reLaunch({url:"/pages/index/index"})}
+
+const result = ref<OfficialFreeResult | null>(null);
+const proof = ref<GoalFitReportValueProof | null>(null);
+const report = ref<GoalFitFullReportResponse | null>(null);
+const assessmentId = ref("");
+const error = ref("");
+const access = ref<GoalFitReportAccessState>("LOCKED");
+const payment = ref<GoalFitVirtualPaymentState>(getActiveGoalFitVirtualPaymentState());
+const expanded = ref(-1);
+const historyMode = ref(false);
+const historyEntitlementUncertain = ref(false);
+let session: GoalFitCompletedSessionV1 | null = null;
+let active = true;
+let unsub: (() => void) | undefined;
+let autoRetries = 0;
+
+const conversion = computed<GoalFitReportConversion | null>(() => report.value && hasReportConversion(report.value.fullReport) ? report.value.fullReport.reportConversion : null);
+const displayOverallScore = computed<number | null>(() => {
+  const score = result.value?.overallScore;
+  return typeof score === "number" && Number.isFinite(score) && score >= 0 ? score : null;
+});
+const riskPreviews = computed<GoalFitSelectedRiskPreview[]>(() => proof.value?.selectedRiskPreviews.slice(0, 3) ?? []);
+const valueCounts = computed(() => {
+  const counts = proof.value?.counts;
+  const safe = (value: unknown): number => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  return [
+    { value: safe(counts?.riskSceneCount), label: "真实工作场景" },
+    { value: safe(counts?.trainableCount), label: "可提前训练项" },
+    { value: safe(counts?.questionCount), label: "面试确认问题" },
+  ];
+});
+const isWechatAndroid = computed(() => {
+  if (getPlatform() !== "wechat_miniapp") return false;
+  try { return uni.getSystemInfoSync().platform === "android"; } catch { return false; }
+});
+const hasFreeResult = computed(() => !!result.value);
+const isRetryableLockedState = computed(() => access.value === "LOCKED" || access.value === "PAYMENT_CANCELLED" || access.value === "PAYMENT_FAILED");
+const showConversionArea = computed(() => !historyMode.value && !report.value && hasFreeResult.value && isRetryableLockedState.value);
+const canPay = computed(() => showConversionArea.value && isWechatAndroid.value && !!proof.value && !!assessmentId.value);
+
+function save(): void {
+  if (!session) return;
+  session = {
+    ...session,
+    assessmentId: assessmentId.value,
+    reportSnapshotId: report.value?.reportSnapshotId ?? session.reportSnapshotId,
+    fullReport: report.value?.fullReport ?? session.fullReport,
+    serverFreeResult: result.value ? { ...result.value, ...(proof.value ? { reportValueProof: proof.value } : {}) } : session.serverFreeResult,
+    reportAccessState: access.value,
+    reportRecoveryPending: access.value === "ENTITLED_TEMPORARY_UNAVAILABLE",
+    syncStatus: "completed",
+  };
+  saveCompletedSession(session);
+}
+
+function setUnlocked(value: GoalFitFullReportResponse): void {
+  if (!active || value.assessmentId !== assessmentId.value) return;
+  report.value = value;
+  access.value = hasReportConversion(value.fullReport) ? "UNLOCKED_V2" : "UNLOCKED_LEGACY";
+  historyEntitlementUncertain.value = false;
+  if (historyMode.value) clearGoalFitHistoryReportRecovery(value.assessmentId);
+  save();
+  void trackEvent("goal_fit_report_fetch_success", { metadata: { reportFormat: access.value, riskModuleCount: conversion.value?.selectedRiskModules.length ?? 0 } });
+}
+
+async function readReport(recovery = false): Promise<void> {
+  if (!assessmentId.value) return;
+  const requestedId = assessmentId.value;
+  access.value = "ENTITLED_LOADING";
+  save();
+  try {
+    setUnlocked(await fetchGoalFitFullReport(requestedId));
+    if (recovery) void trackEvent("goal_fit_report_recovery_success", { metadata: { recovery: true } });
+  } catch (caught) {
+    if (!active || assessmentId.value!==requestedId) return;
+    const temporary = caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_TEMPORARY_UNAVAILABLE";
+    historyEntitlementUncertain.value = caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_NOT_ENTITLED" && historyMode.value;
+    access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
+    if (historyMode.value) saveGoalFitHistoryReportRecovery({ assessmentId: requestedId, recoveryPending: true });
+    save();
+    void trackEvent("goal_fit_report_fetch_temporary_unavailable", { metadata: { recovery, temporary } });
+  }
+}
+
+async function load(id: string): Promise<void> {
+  session = id ? readCompletedSession(id) : readLatestCompletedSession();
+  if (!session) session = await recoverLatestAssessment();
+  else if (!session.assessmentId) {
+    await retryPendingAssessmentSync();
+    session = id ? readCompletedSession(id) : readLatestCompletedSession();
+  }
+  result.value = session ? getDisplayFreeResult(session) : null;
+  assessmentId.value = session?.assessmentId?.startsWith("asm_") ? session.assessmentId : "";
+  proof.value = session?.serverFreeResult?.reportValueProof ?? null;
+  access.value = session?.reportAccessState ?? "LOCKED";
+  if (assessmentId.value && !proof.value) {
+    try {
+      const free = await fetchGoalFitFreeResult(assessmentId.value);
+      result.value = free.freeResult;
+      proof.value = free.freeResult.reportValueProof ?? null;
+      save();
+    } catch { /* Free results remain available from local state if the refresh fails. */ }
+  }
+  if (session?.fullReport && assessmentId.value) setUnlocked({ assessmentId: assessmentId.value, reportSnapshotId: session.reportSnapshotId ?? "", fullReport: session.fullReport });
+  else if (assessmentId.value && (session?.reportRecoveryPending || access.value !== "LOCKED")) await readReport(true);
+  if (!result.value && getPlatform() === "wechat_miniapp") {
+    try {
+      const latest = await fetchLatestGoalFitPurchase();
+      if (latest.purchase) {
+        assessmentId.value = latest.purchase.assessmentId;
+        setUnlocked(latest.purchase);
+      }
+    } catch { /* Latest purchase recovery must not block the free result. */ }
+  }
+  if (!result.value) error.value = "结果暂不可用，请重新开始测试。";
+  if (proof.value) void trackEvent("goal_fit_report_value_proof_view", { metadata: { reportType: proof.value.reportType, mappingVersion: proof.value.mappingVersion, riskModuleCount: proof.value.selectedRiskModules.length } });
+}
+
+async function loadHistory(id: string): Promise<void> {
+  historyMode.value = true;
+  historyEntitlementUncertain.value = false;
+  session = null;
+  assessmentId.value = id;
+  report.value = null;
+  result.value = null;
+  proof.value = null;
+  access.value = "ENTITLED_LOADING";
+  saveGoalFitHistoryReportRecovery({ assessmentId: id, recoveryPending: false });
+  try {
+    const free = await fetchGoalFitFreeResult(id);
+    if (!active || assessmentId.value !== id) return;
+    result.value = free.freeResult;
+    proof.value = free.freeResult.reportValueProof ?? null;
+  } catch {
+    if (!active || assessmentId.value !== id) return;
+    error.value = "报告权益状态暂时无法确认，请重新加载。";
+  }
+  await readReport(true);
+  void trackEvent("goal_fit_report_detail_view", { metadata: { recovery: true } });
+}
+
+async function unlock(): Promise<void> {
+  if (!canPay.value || payment.value.busy) return;
+  void trackEvent("goal_fit_report_unlock_click", { metadata: { reportType: proof.value?.reportType, mappingVersion: proof.value?.mappingVersion, riskModuleCount: proof.value?.selectedRiskModules.length } });
+  access.value = "PREPARING_PAYMENT";
+  const outcome = await startManagedGoalFitVirtualPayment({ assessmentId: assessmentId.value });
+  if (outcome.status === "paid") {
+    access.value = "ENTITLED_LOADING";
+    save();
+    void trackEvent("goal_fit_payment_confirmed", { metadata: { reportType: proof.value?.reportType } });
+    if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
+    else await readReport();
+  } else if (outcome.status === "cancelled" || outcome.status === "closed") access.value = "PAYMENT_CANCELLED";
+  else if (outcome.status === "pending") access.value = "CONFIRMING_PAYMENT";
+  else access.value = "PAYMENT_FAILED";
+  save();
+}
+
+async function resume(): Promise<void> {
+  if (!assessmentId.value || getPlatform() !== "wechat_miniapp") return;
+  const outcome = await resumeManagedGoalFitVirtualPaymentConfirmation({ assessmentId: assessmentId.value });
+  if (outcome === null && !historyMode.value && !report.value && ["PREPARING_PAYMENT", "INVOKING_PAYMENT", "CONFIRMING_PAYMENT"].includes(access.value)) {
+    access.value = "LOCKED";
+    save();
+    return;
+  }
+  if (outcome?.status === "paid") {
+    access.value = "ENTITLED_LOADING";
+    save();
+    if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
+    else await readReport(true);
+  }
+}
+
+function state(value: GoalFitVirtualPaymentState): void {
+  if (!active || (value.assessmentId && value.assessmentId !== assessmentId.value)) return;
+  payment.value = value;
+  if (value.status === "preparing") access.value = "PREPARING_PAYMENT";
+  if (value.status === "invoking") access.value = "INVOKING_PAYMENT";
+  if (value.status === "confirming") access.value = "CONFIRMING_PAYMENT";
+}
+
+onLoad((query) => {
+  unsub = subscribeGoalFitVirtualPaymentState(state);
+  const requested = typeof query?.assessmentId === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(query.assessmentId) ? query.assessmentId : "";
+  const recovery = !requested && !readLatestCompletedSession() ? readGoalFitHistoryReportRecovery() : null;
+  if(requested||recovery) void loadHistory(requested || recovery!.assessmentId);
+  else void load(typeof query?.sessionId === "string" ? query.sessionId : "").then(resume);
+});
+onShow(() => {
+  if (historyMode.value) {
+    if (access.value === "ENTITLED_TEMPORARY_UNAVAILABLE" && autoRetries++ < 1) void readReport(true);
+    return;
+  }
+  if (access.value === "ENTITLED_TEMPORARY_UNAVAILABLE" && autoRetries++ < 1) void readReport(true);
+  else void resume();
+});
+onUnload(() => {
+  active = false;
+  unsub?.();
+  if (assessmentId.value) invalidateGoalFitVirtualPaymentFlow({ assessmentId: assessmentId.value });
+});
+function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
 </script>
-<template><view class="page"><view v-if="result" class="card"><text class="score">{{result.overallScore}} 分</text><text class="title">{{result.overallConclusion.title}}</text><text class="summary">{{result.overallConclusion.summary}}</text><view v-if="proof&&!report" class="proof"><text class="section">这是根据你本次公司类型、岗位方向和34题回答生成的专属报告。</text><text class="title">{{proof.reportTypeTitle}}</text><text class="summary">{{proof.companyType}} · {{proof.roleName}}</text><text class="section">本次重点分析的3个问题</text><view v-for="item in proof.selectedRiskPreviews" :key="item.moduleId"><text class="risk">{{item.title}}</text><text class="summary">{{item.previewShort}}</text></view><text class="section">帮助你避免</text><text v-for="x in proof.avoidancePoints" :key="x" class="summary">{{x}}</text><text class="section">解锁后获得</text><text v-for="x in proof.gainPoints" :key="x" class="summary">{{x}}</text><text class="summary">{{proof.decisionCopy}}</text><text class="summary">风险场景 {{proof.counts.riskSceneCount}} · 可训练项 {{proof.counts.trainableCount}} · 面试问题 {{proof.counts.questionCount}}</text></view><view v-if="access==='ENTITLED_TEMPORARY_UNAVAILABLE'" class="proof"><text class="title">支付已成功</text><text class="summary">报告正在同步，请稍后重新加载。你不需要再次付款。</text><button class="primary" @click="readReport(true)">重新加载报告</button></view><view v-if="canPay"><button class="primary" @click="unlock">解锁完整报告 ¥19.9</button><text class="summary">付款后可查看本次专属风险分析与行动建议。</text></view><text v-else-if="!proof&&!report" class="summary">正在根据你的回答生成专属报告…</text><view v-if="conversion" class="report"><text class="section">{{conversion.reportTypeTitle}}</text><text class="summary">{{conversion.companyType}} · {{conversion.roleName}}</text><text class="risk">优势：{{conversion.primaryStrength}}</text><text class="risk">重点风险：{{conversion.primaryRisk}}</text><text class="section">帮助你避免</text><text v-for="x in conversion.avoidancePoints" :key="x" class="summary">{{x}}</text><text class="section">解锁收获</text><text v-for="x in conversion.gainPoints" :key="x" class="summary">{{x}}</text><view v-for="(s,i) in conversion.sections" :key="s.moduleId" class="module"><text class="section" @click="expanded=expanded===i?-1:i">{{s.title}} {{expanded===i?'−':'+'}}</text><view v-if="expanded===i"><text class="summary">{{s.coreExplanation}}</text><view v-for="x in s.scenarios" :key="x.situation"><text class="risk">{{x.situation}}</text><text class="summary">{{x.reaction}}</text><text class="summary">{{x.interpretation}}</text></view><text class="summary">{{s.normalNewcomerReaction}}</text><text class="summary">{{s.sustainedRisk}}</text><text v-for="x in s.trainableParts" :key="x" class="summary">{{x}}</text><text v-for="x in s.uncontrollableParts" :key="x" class="summary">{{x}}</text><text v-for="x in s.firstSevenDays" :key="x" class="summary">{{x}}</text><text v-for="x in s.firstMonthReminder" :key="x" class="summary">{{x}}</text><text v-for="x in s.interviewQuestions" :key="x" class="summary">{{x}}</text><text class="summary">{{s.typeExplanation}}</text></view></view></view><view v-else-if="report" class="report"><text class="section">完整报告已解锁</text><text class="summary">该报告使用兼容展示格式。</text></view><button class="primary" @click="home">返回首页</button></view><view v-else class="card"><text class="title">结果暂不可用</text><text class="summary">{{error}}</text></view></view></template>
-<style scoped>.page{min-height:100vh;padding:32rpx}.card{padding:32rpx;background:#fff;border-radius:20rpx}.score,.title,.summary,.section,.risk{display:block}.score{font-size:60rpx;color:#4057d6;font-weight:700}.title{font-size:38rpx;font-weight:700;margin:20rpx 0}.section{font-size:30rpx;font-weight:700;margin-top:30rpx}.risk{font-weight:600;margin-top:16rpx}.summary{line-height:1.65;color:#5f6675;margin-top:8rpx}.primary{margin-top:28rpx;background:#4057d6;color:#fff}.proof,.report,.module{margin-top:24rpx;padding-top:8rpx}.module{border-top:1rpx solid #eee}</style>
+
+<template>
+  <view class="page">
+    <view v-if="result" class="content">
+      <view v-if="!report" class="conclusion-card card">
+        <text class="eyebrow">本次职场预演结论</text>
+        <text class="conclusion-title">{{ result.overallConclusion.title }}</text>
+        <view class="overall-score" aria-label="综合适配分">
+          <text class="overall-score-label">综合适配分</text>
+          <text class="overall-score-value">{{ displayOverallScore ?? "—" }}<text class="overall-score-unit">分</text></text>
+        </view>
+        <text class="conclusion-summary">{{ result.overallConclusion.summary }}</text>
+        <view v-if="proof" class="tag-row">
+          <text class="tag">{{ proof.companyType }}</text>
+          <text class="tag">{{ proof.roleName }}</text>
+          <text class="report-type">{{ proof.reportTypeTitle }}</text>
+        </view>
+      </view>
+
+      <template v-if="proof && !report">
+        <view class="section-heading"><text class="section-title">你最需要提前看清的三个场景</text><text class="section-copy">它们来自你本次的公司、岗位与34题回答。</text></view>
+        <view class="risk-list">
+          <view v-for="(item, index) in riskPreviews" :key="item.moduleId" class="risk-card card">
+            <text class="risk-index">0{{ index + 1 }}</text>
+            <text class="risk-title">{{ item.title }}</text>
+            <text class="risk-copy">{{ item.previewShort }}</text>
+          </view>
+        </view>
+
+        <view class="value-card card">
+          <text class="section-title">完整报告会帮你提前准备</text>
+          <view class="value-grid">
+            <view v-for="item in valueCounts" :key="item.label" class="value-item">
+              <text class="value-number">{{ item.value }}</text>
+              <text class="value-label">{{ item.label }}</text>
+            </view>
+          </view>
+        </view>
+
+        <view class="preview-card card">
+          <text class="section-title">报告内容预览</text>
+          <text v-if="riskPreviews[0]" class="preview-copy">{{ riskPreviews[0].previewShort }}</text>
+          <view class="locked-list">
+            <view v-for="label in ['入职前准备建议', '第一个月行动提醒', '面试确认问题']" :key="label" class="locked-item">
+              <text class="lock">🔒</text><text>{{ label }}</text><text class="locked-note">解锁后查看</text>
+            </view>
+          </view>
+          <text v-if="proof.decisionCopy" class="decision-copy">{{ proof.decisionCopy }}</text>
+        </view>
+      </template>
+
+      <view v-if="showConversionArea" class="inline-purchase card">
+        <text class="section-title">你的专属报告已经生成</text>
+        <text class="section-copy">围绕本次测评中的3个重点问题，查看入职准备、行动提醒和面试确认问题。</text>
+        <view class="purchase-value-grid">
+          <view v-for="item in valueCounts" :key="item.label" class="purchase-value-item"><text class="purchase-value-number">{{ item.value }}</text><text class="purchase-value-label">{{ item.label }}</text></view>
+        </view>
+        <view class="purchase-price"><text class="purchase-price-label">本次解锁价格</text><text class="purchase-price-value">¥19.9</text></view>
+        <button v-if="canPay" class="inline-unlock-button" :disabled="payment.busy" @click="unlock">¥19.9 解锁你的专属报告</button>
+        <button v-else-if="isWechatAndroid" class="inline-platform-button" disabled>正在准备你的专属报告</button>
+        <button v-else class="inline-platform-button" disabled>¥19.9 解锁你的专属报告</button>
+        <text v-if="!canPay && !isWechatAndroid" class="platform-copy">请在安卓微信中完成支付</text>
+        <text class="inline-purchase-copy">一次购买，长期查看本次报告</text>
+      </view>
+
+      <view v-if="access === 'ENTITLED_TEMPORARY_UNAVAILABLE'" class="recovery-card card">
+        <text class="section-title">{{ historyEntitlementUncertain ? '报告权益状态暂时无法确认' : '报告正在同步' }}</text>
+        <text class="section-copy">{{ historyEntitlementUncertain ? '请重新加载报告，你不需要再次付款。' : '你不需要再次付款，稍后可继续查看本次报告。' }}</text>
+        <button class="retry-button" @click="readReport(true)">重新加载报告</button>
+      </view>
+
+      <view v-if="conversion" class="full-report card">
+        <text class="eyebrow">完整报告已解锁</text>
+        <text class="conclusion-title">{{ conversion.reportTypeTitle }}</text>
+        <text class="report-meta">{{ conversion.companyType }} · {{ conversion.roleName }}</text>
+        <text class="risk-title">优势：{{ conversion.primaryStrength }}</text>
+        <text class="risk-title">重点风险：{{ conversion.primaryRisk }}</text>
+        <view v-for="(item, index) in conversion.sections" :key="item.moduleId" class="full-module">
+          <text class="section-title" @click="expanded = expanded === index ? -1 : index">{{ item.title }} {{ expanded === index ? '−' : '+' }}</text>
+          <view v-if="expanded === index"><text class="section-copy">{{ item.coreExplanation }}</text><text v-for="scenario in item.scenarios" :key="scenario.situation" class="section-copy">{{ scenario.situation }}：{{ scenario.reaction }}</text><text class="section-copy">{{ item.sustainedRisk }}</text></view>
+        </view>
+      </view>
+      <view v-else-if="report" class="full-report card"><text class="section-title">完整报告已解锁</text><text class="section-copy">该报告使用兼容展示格式。</text></view>
+
+      <view class="page-actions"><text class="home-link" @click="home">返回首页</text></view>
+    </view>
+    <view v-else class="empty-card card"><text class="conclusion-title">结果暂不可用</text><text class="section-copy">{{ error }}</text></view>
+
+    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" :disabled="payment.busy" @click="unlock">¥19.9 解锁你的专属报告</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="!canPay && !isWechatAndroid" class="platform-copy">请在安卓微信中完成支付</text><text v-else-if="!canPay" class="cta-copy">正在准备你的专属报告</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
+  </view>
+</template>
+
+<style scoped>
+.page{min-height:100vh;background:#f4f6fa;padding:28rpx 28rpx calc(48rpx + env(safe-area-inset-bottom));box-sizing:border-box}.content{padding-bottom:176rpx}.card{background:#fff;border-radius:24rpx;padding:30rpx;box-sizing:border-box;box-shadow:0 10rpx 28rpx rgba(43,55,88,.06)}.conclusion-card{border:1rpx solid #e4e8ff}.eyebrow{display:block;color:#5267d8;font-size:25rpx;font-weight:600;letter-spacing:1rpx}.conclusion-title{display:block;margin-top:18rpx;color:#1f2740;font-size:46rpx;line-height:1.28;font-weight:700}.conclusion-summary,.section-copy,.risk-copy,.preview-copy,.decision-copy{display:block;margin-top:14rpx;color:#667086;font-size:28rpx;line-height:1.65}.tag-row{display:flex;flex-wrap:wrap;gap:12rpx;margin-top:24rpx}.tag,.report-type{padding:8rpx 16rpx;border-radius:999rpx;font-size:24rpx}.tag{background:#f1f3f8;color:#566074}.report-type{background:#edf0ff;color:#4057d6}.section-heading{margin:38rpx 4rpx 20rpx}.section-title{display:block;color:#222b42;font-size:32rpx;font-weight:700;line-height:1.45}.risk-list{display:flex;flex-direction:column;gap:18rpx}.risk-card{position:relative;padding-left:94rpx}.risk-index{position:absolute;left:30rpx;top:34rpx;color:#7585df;font-size:30rpx;font-weight:700}.risk-title{display:block;color:#27314b;font-size:31rpx;font-weight:700}.value-card,.preview-card,.recovery-card,.full-report,.platform-card{margin-top:24rpx}.value-grid{display:flex;gap:14rpx;margin-top:24rpx}.value-item{flex:1;min-width:0;padding:22rpx 10rpx;background:#f5f7ff;border-radius:16rpx;text-align:center}.value-number{display:block;color:#4057d6;font-size:44rpx;font-weight:700;line-height:1}.value-label{display:block;margin-top:12rpx;color:#5f6880;font-size:23rpx;line-height:1.4}.locked-list{margin-top:22rpx}.locked-item{display:flex;align-items:center;gap:12rpx;margin-top:12rpx;padding:18rpx;border-radius:14rpx;background:#f7f8fb;color:#485269;font-size:27rpx}.lock{font-size:25rpx}.locked-note{margin-left:auto;color:#949bac;font-size:23rpx}.decision-copy{padding-top:18rpx;border-top:1rpx solid #edf0f6}.retry-button{margin-top:22rpx;background:#4057d6;color:#fff}.full-module{padding:22rpx 0;border-top:1rpx solid #edf0f6}.report-meta{display:block;margin:14rpx 0 22rpx;color:#667086;font-size:27rpx}.platform-card{border:1rpx solid #e4e8ff}.page-actions{text-align:center;padding:32rpx 0 14rpx}.home-link{color:#7b8497;font-size:27rpx}.fixed-cta{position:fixed;right:0;bottom:0;left:0;z-index:10;padding:18rpx 28rpx calc(18rpx + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(244,246,250,0),#f4f6fa 28%)}.cta-inner{padding:16rpx;background:#fff;border-radius:22rpx;box-shadow:0 -6rpx 24rpx rgba(43,55,88,.12)}.unlock-button{background:#4057d6;color:#fff;font-size:31rpx;font-weight:700}.unlock-button[disabled]{opacity:.72}.cta-copy{display:block;margin-top:10rpx;color:#6f788d;font-size:24rpx;text-align:center}.empty-card{margin-top:80rpx}.full-report .risk-title{margin-top:20rpx}@media (max-width:360px){.page{padding-right:22rpx;padding-left:22rpx}.conclusion-title{font-size:42rpx}.value-label{font-size:21rpx}.risk-card{padding-left:82rpx}.risk-index{left:25rpx}}
+.overall-score{display:block;margin-top:22rpx;padding:24rpx 26rpx;background:#f2f4ff;border:1rpx solid #e1e6ff;border-radius:18rpx}.overall-score-label{display:block;color:#667086;font-size:26rpx;line-height:1.4}.overall-score-value{display:block;margin-top:10rpx;color:#4057d6;font-size:82rpx;font-weight:700;line-height:1;letter-spacing:-2rpx}.overall-score-unit{margin-left:8rpx;color:#667086;font-size:30rpx;font-weight:600;letter-spacing:0}
+.inline-purchase{margin-top:24rpx;border:1rpx solid #e1e6ff}.inline-unlock-button{margin-top:22rpx;background:#4057d6;color:#fff;font-size:30rpx;font-weight:700}.inline-unlock-button[disabled]{opacity:.72}.inline-purchase-copy,.platform-copy{display:block;margin-top:12rpx;color:#6f788d;font-size:24rpx;text-align:center}.platform-copy{color:#7b8497}
+.purchase-value-grid{display:flex;gap:12rpx;margin-top:22rpx}.purchase-value-item{flex:1;min-width:0;padding:16rpx 8rpx;background:#f5f7ff;border-radius:14rpx;text-align:center}.purchase-value-number{display:block;color:#4057d6;font-size:34rpx;font-weight:700}.purchase-value-label{display:block;margin-top:8rpx;color:#5f6880;font-size:21rpx;line-height:1.35}.purchase-price{display:flex;align-items:baseline;justify-content:space-between;margin-top:22rpx;padding-top:18rpx;border-top:1rpx solid #edf0f6}.purchase-price-label{color:#667086;font-size:26rpx}.purchase-price-value{color:#4057d6;font-size:40rpx;font-weight:700}.inline-platform-button{margin-top:22rpx;background:#eef1f7;color:#657089;font-size:29rpx;font-weight:600}.inline-platform-button[disabled]{opacity:1}.fixed-value-copy{display:block;margin-bottom:12rpx;color:#5f6880;font-size:24rpx;text-align:center}
+</style>
