@@ -1,5 +1,7 @@
 import { ApiError, request } from "@/api/request";
 import type { GoalFitResult } from "@/domain/goal-fit/types";
+import type { GoalFitApiError, GoalFitFreeResultResponse, GoalFitFullReportResponse } from "@/types/goal-fit-report-conversion";
+export type { GoalFitFullReportResponse, GoalFitFreeResultResponse } from "@/types/goal-fit-report-conversion";
 
 type PaymentRequestClient = typeof request;
 
@@ -18,12 +20,6 @@ export type GoalFitPaymentConfirmation = {
   status: "pending" | "paid" | "closed" | "review_required";
   reportAvailable: boolean;
   assessmentId?: string;
-};
-
-export type GoalFitFullReportResponse = {
-  assessmentId: string;
-  reportSnapshotId: string;
-  fullReport: GoalFitResult;
 };
 
 export type LatestGoalFitPurchaseResponse = { purchase: GoalFitFullReportResponse | null };
@@ -130,18 +126,31 @@ export async function confirmGoalFitVirtualPayment(
 
 function isFullReportResponse(value: unknown): value is GoalFitFullReportResponse {
   const item = value as Partial<GoalFitFullReportResponse>;
+  const report = item.fullReport as unknown as Record<string, unknown> | undefined;
+  const legacy = report as { scores?: { overallScore?: unknown }; overallConclusion?: { title?: unknown }; riskInsights?: unknown; recommendations?: unknown; cards?: unknown } | undefined;
   return isNonEmptyString(item?.assessmentId)
     && isNonEmptyString(item.reportSnapshotId)
-    && Boolean(item.fullReport && typeof item.fullReport === "object"
-      && typeof item.fullReport.scores?.overallScore === "number"
-      && isNonEmptyString(item.fullReport.overallConclusion?.title)
-      && Array.isArray(item.fullReport.riskInsights)
-      && Array.isArray(item.fullReport.recommendations)
-      && Array.isArray(item.fullReport.cards));
+    && Boolean(report && typeof report === "object" && (Boolean(report.reportConversion) || (typeof legacy?.scores?.overallScore === "number" && isNonEmptyString(legacy.overallConclusion?.title) && Array.isArray(legacy.riskInsights) && Array.isArray(legacy.recommendations) && Array.isArray(legacy.cards))));
+}
+
+export class GoalFitReportAccessError extends ApiError { constructor(readonly code: GoalFitApiError, statusCode: number) { super(code, { statusCode }); this.name = "GoalFitReportAccessError"; } }
+
+function translateReportError(error: unknown): never {
+  if (error instanceof ApiError && (error.message === "FULL_REPORT_NOT_ENTITLED" || error.message === "FULL_REPORT_TEMPORARY_UNAVAILABLE")) throw new GoalFitReportAccessError(error.message, error.statusCode ?? 0);
+  throw error;
+}
+
+export async function fetchGoalFitFreeResult(assessmentId: string): Promise<GoalFitFreeResultResponse> {
+  try {
+    const response = await paymentRequestClient<unknown>({ path: `/api/miniapp/goal-fit/assessments/${encodeRequiredId(assessmentId, "INVALID_FULL_REPORT_RESPONSE")}/free-result`, requiresMiniappAuth: true });
+    const value = response as GoalFitFreeResultResponse;
+    if (!isNonEmptyString(value?.assessmentId) || !isNonEmptyString(value.reportSnapshotId) || !value.freeResult || typeof value.freeResult.overallScore !== "number") throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
+    return value;
+  } catch (error) { return translateReportError(error); }
 }
 
 export async function fetchGoalFitFullReport(assessmentId: string): Promise<GoalFitFullReportResponse> {
-  const response = await paymentRequestClient<unknown>({
+ try { const response = await paymentRequestClient<unknown>({
     path: `/api/miniapp/goal-fit/assessments/${encodeRequiredId(assessmentId, "INVALID_FULL_REPORT_RESPONSE")}/full-report`,
     requiresMiniappAuth: true,
   });
@@ -151,6 +160,7 @@ export async function fetchGoalFitFullReport(assessmentId: string): Promise<Goal
   }
 
   return response;
+ } catch (error) { return translateReportError(error); }
 }
 
 export async function fetchLatestGoalFitPurchase(): Promise<LatestGoalFitPurchaseResponse> {

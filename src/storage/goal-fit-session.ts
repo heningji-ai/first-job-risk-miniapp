@@ -1,13 +1,15 @@
 import type { CompanyType, GoalFitAnswerMap, GoalFitResult, GoalFitScoreResult, RoleType } from "@/domain/goal-fit/types";
+import type { GoalFitReportValueProof, GoalFitFullReport } from "@/types/goal-fit-report-conversion";
 
 const KEY = "first_job_goal_fit_completed_session_v1";
 export type AssessmentSyncStatus = "local_only" | "pending" | "syncing" | "completed";
+export type GoalFitReportAccessState = "LOCKED" | "PREPARING_PAYMENT" | "INVOKING_PAYMENT" | "CONFIRMING_PAYMENT" | "ENTITLED_LOADING" | "ENTITLED_TEMPORARY_UNAVAILABLE" | "UNLOCKED_V2" | "UNLOCKED_LEGACY" | "PAYMENT_CANCELLED" | "PAYMENT_FAILED";
 export type AssessmentVersions = { questionSetVersion: string; scoringVersion: string; reportVersion: string };
 export type OfficialFreeResult = { overallScore: number; overallConclusion: GoalFitResult["overallConclusion"]; primaryRisk: { title: string; description: string }; riskInsights: Array<{ title: string; description: string }>; recommendations: Array<{ title: string; description: string }> };
 export interface GoalFitCompletedSessionV1 {
   schemaVersion: 1; id: string; targetCompany: CompanyType; targetRole: RoleType; selectedQuestionIds: string[]; answers: GoalFitAnswerMap;
   scores?: GoalFitScoreResult; result?: GoalFitResult; createdAt: string; completedAt: string;
-  submissionId?: string; localFreeResult?: OfficialFreeResult; serverFreeResult?: OfficialFreeResult; fullReport?: GoalFitResult; assessmentId?: string; reportSnapshotId?: string; versions?: AssessmentVersions;
+  submissionId?: string; localFreeResult?: OfficialFreeResult; serverFreeResult?: OfficialFreeResult & { reportValueProof?: GoalFitReportValueProof }; fullReport?: GoalFitFullReport; assessmentId?: string; reportSnapshotId?: string; versions?: AssessmentVersions; reportAccessState?: GoalFitReportAccessState; reportRecoveryPending?: boolean;
   syncStatus?: AssessmentSyncStatus; syncAttempts?: number; lastSyncAttemptAt?: string; lastSyncErrorCode?: string;
 }
 function validOfficial(value: unknown): value is OfficialFreeResult { const item = value as OfficialFreeResult; return Boolean(item && typeof item.overallScore === "number" && item.overallConclusion && item.primaryRisk && Array.isArray(item.riskInsights) && Array.isArray(item.recommendations)); }
