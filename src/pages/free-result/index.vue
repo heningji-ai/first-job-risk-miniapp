@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { fetchGoalFitFreeResult, fetchGoalFitFullReport, fetchLatestGoalFitPurchase, GoalFitReportAccessError, type GoalFitFullReportResponse } from "@/api/goal-fit-payment";
 import { getPlatform } from "@/platform";
 import { getDisplayFreeResult, readCompletedSession, readLatestCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
@@ -17,7 +17,8 @@ const assessmentId = ref("");
 const error = ref("");
 const access = ref<GoalFitReportAccessState>("LOCKED");
 const payment = ref<GoalFitVirtualPaymentState>(getActiveGoalFitVirtualPaymentState());
-const expanded = ref(-1);
+const expanded = ref(0);
+const activePaidView = ref<"overview" | "full">("full");
 const historyMode = ref(false);
 const historyEntitlementUncertain = ref(false);
 let session: GoalFitCompletedSessionV1 | null = null;
@@ -48,6 +49,28 @@ const hasFreeResult = computed(() => !!result.value);
 const isRetryableLockedState = computed(() => access.value === "LOCKED" || access.value === "PAYMENT_CANCELLED" || access.value === "PAYMENT_FAILED");
 const showConversionArea = computed(() => !historyMode.value && !report.value && hasFreeResult.value && isRetryableLockedState.value);
 const canPay = computed(() => showConversionArea.value && isWechatAndroid.value && !!proof.value && !!assessmentId.value);
+
+function hasText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasItems(value: unknown): value is string[] {
+  return Array.isArray(value) && value.some((item) => hasText(item));
+}
+
+function toggleSection(index: number): void {
+  expanded.value = expanded.value === index ? -1 : index;
+}
+
+function switchPaidView(view: "overview" | "full"): void {
+  activePaidView.value = view;
+  uni.pageScrollTo({ scrollTop: 0, duration: 0 });
+}
+
+watch([assessmentId, conversion], () => {
+  expanded.value = 0;
+  activePaidView.value = "full";
+});
 
 function save(): void {
   if (!session) return;
@@ -216,8 +239,10 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
 
 <template>
   <view class="page">
-    <view v-if="result" class="content">
-      <view v-if="!report" class="conclusion-card card">
+    <view v-if="result || report" class="content">
+      <view v-if="conversion && result && proof" class="paid-view-switch card"><button :class="['paid-view-button', { active: activePaidView === 'overview' }]" @click="switchPaidView('overview')">结果概览</button><button :class="['paid-view-button', { active: activePaidView === 'full' }]" @click="switchPaidView('full')">完整报告</button></view>
+
+      <view v-if="result && (!report || (conversion && activePaidView === 'overview'))" class="conclusion-card card">
         <text class="eyebrow">本次职场预演结论</text>
         <text class="conclusion-title">{{ result.overallConclusion.title }}</text>
         <view class="overall-score" aria-label="综合适配分">
@@ -232,7 +257,7 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
         </view>
       </view>
 
-      <template v-if="proof && !report">
+      <template v-if="proof && (!report || (conversion && activePaidView === 'overview'))">
         <view class="section-heading"><text class="section-title">你最需要提前看清的三个场景</text><text class="section-copy">它们来自你本次的公司、岗位与34题回答。</text></view>
         <view class="risk-list">
           <view v-for="(item, index) in riskPreviews" :key="item.moduleId" class="risk-card card">
@@ -284,18 +309,36 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
         <button class="retry-button" @click="readReport(true)">重新加载报告</button>
       </view>
 
-      <view v-if="conversion" class="full-report card">
-        <text class="eyebrow">完整报告已解锁</text>
-        <text class="conclusion-title">{{ conversion.reportTypeTitle }}</text>
-        <text class="report-meta">{{ conversion.companyType }} · {{ conversion.roleName }}</text>
-        <text class="risk-title">优势：{{ conversion.primaryStrength }}</text>
-        <text class="risk-title">重点风险：{{ conversion.primaryRisk }}</text>
-        <view v-for="(item, index) in conversion.sections" :key="item.moduleId" class="full-module">
-          <text class="section-title" @click="expanded = expanded === index ? -1 : index">{{ item.title }} {{ expanded === index ? '−' : '+' }}</text>
-          <view v-if="expanded === index"><text class="section-copy">{{ item.coreExplanation }}</text><text v-for="scenario in item.scenarios" :key="scenario.situation" class="section-copy">{{ scenario.situation }}：{{ scenario.reaction }}</text><text class="section-copy">{{ item.sustainedRisk }}</text></view>
+      <view v-if="conversion && (!result || !proof || activePaidView === 'full')" class="full-report">
+        <view class="report-header card">
+          <text class="eyebrow">完整报告已解锁</text>
+          <text class="conclusion-title">{{ conversion.reportTypeTitle }}</text>
+          <view class="tag-row"><text class="tag">{{ conversion.companyType }}</text><text class="tag">{{ conversion.roleName }}</text></view>
+        </view>
+
+        <view class="report-overview">
+          <view class="overview-card strength-card"><text class="overview-label">你的优势</text><text class="overview-copy">{{ conversion.primaryStrength }}</text></view>
+          <view class="overview-card risk-overview-card"><text class="overview-label">最需要关注的风险</text><text class="overview-copy">{{ conversion.primaryRisk }}</text></view>
+        </view>
+
+        <view v-for="(item, index) in conversion.sections" :key="item.moduleId" class="report-section-card card">
+          <view class="section-toggle" role="button" @click="toggleSection(index)">
+            <text class="risk-index">0{{ index + 1 }}</text>
+            <view class="section-toggle-content"><text class="section-title">{{ item.title }}</text><text v-if="hasText(item.coreExplanation)" class="section-copy">{{ item.coreExplanation }}</text><text class="section-action">{{ expanded === index ? '收起详细分析 ↑' : '查看详细分析 ↓' }}</text></view>
+          </view>
+
+          <view v-if="expanded === index" class="section-detail">
+            <view v-if="item.scenarios.length" class="detail-group"><text class="detail-group-title">典型工作场景</text><view v-for="(scenario, scenarioIndex) in item.scenarios" :key="`${scenario.situation}-${scenarioIndex}`" class="scenario-card"><text class="scenario-index">场景0{{ scenarioIndex + 1 }}</text><text class="scenario-label">情境</text><text class="detail-copy">{{ scenario.situation }}</text><text class="scenario-label">反应</text><text class="detail-copy">{{ scenario.reaction }}</text></view></view>
+            <view v-if="hasText(item.normalNewcomerReaction)" class="detail-group"><text class="detail-group-title">新人可能出现的正常反应</text><text class="detail-copy">{{ item.normalNewcomerReaction }}</text></view>
+            <view v-if="hasText(item.sustainedRisk)" class="detail-group"><text class="detail-group-title">这种情况持续后的风险</text><text class="detail-copy">{{ item.sustainedRisk }}</text></view>
+            <view v-if="hasItems(item.trainableParts)" class="detail-group"><text class="detail-group-title">可以训练的部分</text><view v-for="(entry, entryIndex) in item.trainableParts" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
+            <view v-if="hasItems(item.firstSevenDays)" class="detail-group"><text class="detail-group-title">入职前7天准备</text><view v-for="(entry, entryIndex) in item.firstSevenDays" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
+            <view v-if="hasItems(item.firstMonthReminder)" class="detail-group"><text class="detail-group-title">第一个月行动提醒</text><view v-for="(entry, entryIndex) in item.firstMonthReminder" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
+            <view v-if="hasItems(item.interviewQuestions)" class="detail-group"><text class="detail-group-title">面试确认问题</text><view v-for="(entry, entryIndex) in item.interviewQuestions" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
+          </view>
         </view>
       </view>
-      <view v-else-if="report" class="full-report card"><text class="section-title">完整报告已解锁</text><text class="section-copy">该报告使用兼容展示格式。</text></view>
+      <view v-else-if="report && !conversion" class="full-report card"><text class="section-title">完整报告已解锁</text><text class="section-copy">该报告使用兼容展示格式。</text></view>
 
       <view class="page-actions"><text class="home-link" @click="home">返回首页</text></view>
     </view>
@@ -310,4 +353,6 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
 .overall-score{display:block;margin-top:22rpx;padding:24rpx 26rpx;background:#f2f4ff;border:1rpx solid #e1e6ff;border-radius:18rpx}.overall-score-label{display:block;color:#667086;font-size:26rpx;line-height:1.4}.overall-score-value{display:block;margin-top:10rpx;color:#4057d6;font-size:82rpx;font-weight:700;line-height:1;letter-spacing:-2rpx}.overall-score-unit{margin-left:8rpx;color:#667086;font-size:30rpx;font-weight:600;letter-spacing:0}
 .inline-purchase{margin-top:24rpx;border:1rpx solid #e1e6ff}.inline-unlock-button{margin-top:22rpx;background:#4057d6;color:#fff;font-size:30rpx;font-weight:700}.inline-unlock-button[disabled]{opacity:.72}.inline-purchase-copy,.platform-copy{display:block;margin-top:12rpx;color:#6f788d;font-size:24rpx;text-align:center}.platform-copy{color:#7b8497}
 .purchase-value-grid{display:flex;gap:12rpx;margin-top:22rpx}.purchase-value-item{flex:1;min-width:0;padding:16rpx 8rpx;background:#f5f7ff;border-radius:14rpx;text-align:center}.purchase-value-number{display:block;color:#4057d6;font-size:34rpx;font-weight:700}.purchase-value-label{display:block;margin-top:8rpx;color:#5f6880;font-size:21rpx;line-height:1.35}.purchase-price{display:flex;align-items:baseline;justify-content:space-between;margin-top:22rpx;padding-top:18rpx;border-top:1rpx solid #edf0f6}.purchase-price-label{color:#667086;font-size:26rpx}.purchase-price-value{color:#4057d6;font-size:40rpx;font-weight:700}.inline-platform-button{margin-top:22rpx;background:#eef1f7;color:#657089;font-size:29rpx;font-weight:600}.inline-platform-button[disabled]{opacity:1}.fixed-value-copy{display:block;margin-bottom:12rpx;color:#5f6880;font-size:24rpx;text-align:center}
+.full-report{margin-top:24rpx}.report-overview{display:flex;flex-direction:column;gap:18rpx;margin-top:18rpx}.overview-card{padding:28rpx 30rpx;border-radius:22rpx}.strength-card{background:#f1f4ff;border:1rpx solid #e1e6ff}.risk-overview-card{background:#f8f5f2;border:1rpx solid #eee4dc}.overview-label{display:block;color:#303b58;font-size:26rpx;font-weight:700}.overview-copy{display:block;margin-top:12rpx;color:#4f5a70;font-size:29rpx;line-height:1.65;word-break:break-word}.report-section-card{margin-top:20rpx;padding:0;overflow:hidden}.section-toggle{display:flex;gap:20rpx;padding:28rpx 28rpx 24rpx}.section-toggle-content{flex:1;min-width:0}.section-action{display:block;margin-top:18rpx;color:#4057d6;font-size:25rpx;font-weight:600}.section-detail{padding:0 28rpx 30rpx;border-top:1rpx solid #edf0f6}.detail-group{padding-top:26rpx}.detail-group-title{display:block;color:#303b58;font-size:28rpx;font-weight:700}.detail-copy{display:block;margin-top:12rpx;color:#5f6880;font-size:27rpx;line-height:1.65;word-break:break-word}.scenario-card{margin-top:16rpx;padding:20rpx;border-radius:16rpx;background:#f7f8fb}.scenario-index,.scenario-label{display:block;color:#6574c8;font-size:23rpx;font-weight:600}.scenario-label{margin-top:16rpx;color:#687286}.detail-list-item{display:flex;gap:14rpx;margin-top:14rpx;padding:16rpx;border-radius:14rpx;background:#f7f8fb}.detail-list-item .detail-copy{flex:1;min-width:0;margin-top:0}.detail-list-index{flex:0 0 34rpx;width:34rpx;height:34rpx;border-radius:50%;background:#e9edff;color:#4057d6;font-size:22rpx;line-height:34rpx;text-align:center}
+.paid-view-switch{display:flex;gap:10rpx;margin-bottom:20rpx;padding:10rpx;background:#edf0f6}.paid-view-button{flex:1;margin:0;padding:16rpx 12rpx;border:0;border-radius:14rpx;background:transparent;color:#687286;font-size:27rpx;font-weight:600;line-height:1.35}.paid-view-button.active{background:#fff;color:#4057d6;box-shadow:0 4rpx 12rpx rgba(43,55,88,.08)}
 </style>
