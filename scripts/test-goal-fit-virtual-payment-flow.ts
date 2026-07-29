@@ -57,6 +57,13 @@ void (async () => {
       const outcome = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), invokePayment: async () => { throw { kind, errMsg: "hidden" }; } } });
       assert(outcome.status === "failed" && outcome.failureKind === kind && clears.length === 1 && !calls.includes("confirm"), `${kind} is explicit failure`);
     }
+    calls.length = clears.length = 0;
+    const timedOut = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), invokePayment: async () => { throw { kind: "timeout" }; } } });
+    assert(timedOut.status === "failed" && timedOut.safeCode === "PAYMENT_INVOKE_TIMEOUT" && clears.length === 1 && !calls.includes("confirm"), "invoke timeout must fail without confirming or granting a report");
+    let requestCounter = 0;
+    const retryAfterTimeout = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), requestIdFactory: () => `req_${++requestCounter}`, invokePayment: async () => { throw { kind: "timeout" }; } } });
+    const retryAfterTimeoutAgain = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), requestIdFactory: () => `req_${++requestCounter}`, invokePayment: async () => { throw { kind: "timeout" }; } } });
+    assert(retryAfterTimeout.status === "failed" && retryAfterTimeoutAgain.status === "failed" && requestCounter === 2, "each retry after timeout must create a fresh request id");
     const bad = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "" });
     assert(bad.status === "failed" && bad.safeCode === "INVALID_ASSESSMENT_ID", "invalid assessment safe failure");
   } finally { /* injected dependencies own all resources */ }

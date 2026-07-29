@@ -1,4 +1,5 @@
 const MINIMUM_SDK_VERSION = [2, 19, 2] as const;
+export const WECHAT_VIRTUAL_PAYMENT_TIMEOUT_MS = 20_000;
 
 export interface WechatVirtualPaymentInvocationParams {
   mode: "short_series_goods";
@@ -20,7 +21,8 @@ export type WechatVirtualPaymentFailureKind =
   | "risk_blocked"
   | "failed"
   | "unsupported"
-  | "invalid_params";
+  | "invalid_params"
+  | "timeout";
 
 const SAFE_CODES: Record<WechatVirtualPaymentFailureKind, string> = {
   cancelled: "WECHAT_VIRTUAL_PAYMENT_CANCELLED",
@@ -32,6 +34,7 @@ const SAFE_CODES: Record<WechatVirtualPaymentFailureKind, string> = {
   failed: "WECHAT_VIRTUAL_PAYMENT_FAILED",
   unsupported: "WECHAT_VIRTUAL_PAYMENT_UNSUPPORTED",
   invalid_params: "WECHAT_VIRTUAL_PAYMENT_INVALID_PARAMS",
+  timeout: "WECHAT_VIRTUAL_PAYMENT_TIMEOUT",
 };
 
 export class WechatVirtualPaymentError extends Error {
@@ -49,10 +52,10 @@ export class WechatVirtualPaymentError extends Error {
 }
 
 type WxApi = {
-  getSystemInfoSync?: () => { SDKVersion?: unknown };
+  getSystemInfoSync?: () => { SDKVersion?: unknown; platform?: unknown; version?: unknown };
   canIUse?: (name: string) => boolean;
   login?: (options: { success: (result: { code?: unknown }) => void; fail: () => void }) => void;
-  requestVirtualPayment?: (options: WechatVirtualPaymentInvocationParams & { success: (result: unknown) => void; fail: (error: unknown) => void }) => void;
+  requestVirtualPayment?: (options: WechatVirtualPaymentInvocationParams & { success: (result: unknown) => void; fail: (error: unknown) => void; complete: (result: unknown) => void }) => void;
 };
 
 function getWx(): WxApi | null {
@@ -109,6 +112,18 @@ export function classifyWechatVirtualPaymentFailure(error: unknown): WechatVirtu
   return new WechatVirtualPaymentError(kind, providerCode);
 }
 
+function reportVirtualPaymentDiagnostic(event: string, extra: Record<string, string | number | undefined> = {}): void {
+  const details: Record<string, string | number> = {};
+  try {
+    const info = getWx()?.getSystemInfoSync?.();
+    if (typeof info?.platform === "string") details.platform = info.platform;
+    if (typeof info?.version === "string") details.wechatVersion = info.version;
+    if (typeof info?.SDKVersion === "string") details.sdkVersion = info.SDKVersion;
+  } catch { /* diagnostics cannot affect payment */ }
+  for (const [key, value] of Object.entries(extra)) if (value !== undefined) details[key] = value;
+  try { console.info("[goal-fit-payment]", event, details); } catch { /* console availability cannot affect payment */ }
+}
+
 export function requestWechatLoginCode(): Promise<string> {
   const login = getWx()?.login;
   if (typeof login !== "function") return Promise.reject(new WechatVirtualPaymentError("unsupported"));
@@ -137,6 +152,7 @@ function validInvocationParams(value: WechatVirtualPaymentInvocationParams): boo
 
 export function invokeWechatVirtualPayment(
   params: WechatVirtualPaymentInvocationParams,
+  options: { timeoutMs?: number } = {},
 ): Promise<WechatVirtualPaymentInvocationResult> {
   if (!validInvocationParams(params)) return Promise.reject(new WechatVirtualPaymentError("invalid_params"));
   if (!isWechatVirtualPaymentSupported()) return Promise.reject(new WechatVirtualPaymentError("unsupported"));
@@ -144,18 +160,46 @@ export function invokeWechatVirtualPayment(
   if (typeof invoke !== "function") return Promise.reject(new WechatVirtualPaymentError("unsupported"));
   return new Promise((resolve, reject) => {
     let settled = false;
+    const timeoutMs = typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs) && options.timeoutMs >= 0
+      ? options.timeoutMs
+      : WECHAT_VIRTUAL_PAYMENT_TIMEOUT_MS;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reportVirtualPaymentDiagnostic("virtual_payment_timeout");
+      reject(new WechatVirtualPaymentError("timeout"));
+    }, timeoutMs);
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reportVirtualPaymentDiagnostic("virtual_payment_success");
+      resolve({ status: "invoked" });
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const providerCode = typeof (error as { errCode?: unknown })?.errCode === "number" ? (error as { errCode: number }).errCode : undefined;
+      reportVirtualPaymentDiagnostic("virtual_payment_fail", { errCode: providerCode });
+      reject(classifyWechatVirtualPaymentFailure(error));
+    };
     try {
+      reportVirtualPaymentDiagnostic("virtual_payment_invoking");
       invoke({
         mode: params.mode,
         signData: params.signData,
         paySig: params.paySig,
         signature: params.signature,
-        success: () => { if (!settled) { settled = true; resolve({ status: "invoked" }); } },
-        fail: (error) => { if (!settled) { settled = true; reject(classifyWechatVirtualPaymentFailure(error)); } },
+        success: succeed,
+        fail,
+        complete: () => { reportVirtualPaymentDiagnostic("virtual_payment_complete"); },
       });
     } catch {
       if (!settled) {
         settled = true;
+        clearTimeout(timeout);
+        reportVirtualPaymentDiagnostic("virtual_payment_sync_throw");
         reject(new WechatVirtualPaymentError("failed"));
       }
     }

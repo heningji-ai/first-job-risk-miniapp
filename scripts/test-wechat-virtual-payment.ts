@@ -1,11 +1,14 @@
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 async function rejected(action: () => Promise<unknown>, kind: string): Promise<void> { try { await action(); } catch (error) { assert((error as { kind?: string }).kind === kind, `expected ${kind}`); return; } throw new Error(`expected ${kind}`); }
 const originalWx = (globalThis as { wx?: unknown }).wx;
+const originalConsoleInfo = console.info;
 void (async () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const payment = require("../src/services/wechat-virtual-payment") as typeof import("../src/services/wechat-virtual-payment");
   const setWx = (value: unknown) => { (globalThis as { wx?: unknown }).wx = value; };
   const supported = (SDKVersion: string, canIUse = false) => ({ getSystemInfoSync: () => ({ SDKVersion }), canIUse: () => canIUse, requestVirtualPayment: () => undefined });
+  const logs: unknown[][] = [];
+  console.info = (...values: unknown[]) => { logs.push(values); };
   try {
     for (const [version, expected] of [["2.19.2", true], ["2.19.1", false], ["2.20.0", true], ["3.0.0", true], ["2.9.10", false]] as const) { setWx(supported(version)); assert(payment.isWechatVirtualPaymentSupported() === expected, `SDK ${version}`); }
     setWx({ getSystemInfoSync: () => ({ SDKVersion: "" }), canIUse: () => true, requestVirtualPayment: () => undefined }); assert(payment.isWechatVirtualPaymentSupported(), "canIUse fallback");
@@ -20,10 +23,10 @@ void (async () => {
     setWx(undefined); await rejected(payment.requestWechatLoginCode, "unsupported");
 
     let captured: Record<string, unknown> | null = null; let callbacks: any;
-    setWx({ getSystemInfoSync: () => ({ SDKVersion: "2.19.2" }), requestVirtualPayment: (options: any) => { captured = options; callbacks = options; options.success({}); options.fail({ errCode: -2, errMsg: "hidden" }); } });
+    setWx({ getSystemInfoSync: () => ({ SDKVersion: "2.19.2", platform: "ios", version: "8.0.0" }), requestVirtualPayment: (options: any) => { captured = options; callbacks = options; options.success({}); options.complete({}); options.fail({ errCode: -2, errMsg: "hidden" }); } });
     const params = { mode: "short_series_goods" as const, signData: '{"opaque":true}', paySig: "sig", signature: "signature" };
     const result = await payment.invokeWechatVirtualPayment(params); assert(result.status === "invoked" && !("paid" in result), "success only means invoked");
-    assert(captured && JSON.stringify(Object.keys(captured).sort()) === JSON.stringify(["fail", "mode", "paySig", "signData", "signature", "success"]), "exact wx params"); assert((captured as any).signData === params.signData, "signData unchanged");
+    assert(captured && JSON.stringify(Object.keys(captured).sort()) === JSON.stringify(["complete", "fail", "mode", "paySig", "signData", "signature", "success"]), "exact wx params"); assert((captured as any).signData === params.signData, "signData unchanged");
     for (const bad of [{ ...params, mode: "wrong" }, { ...params, signData: "" }, { ...params, paySig: "" }, { ...params, signature: "" }] as any[]) await rejected(() => payment.invokeWechatVirtualPayment(bad), "invalid_params");
     const cases: Array<[number | undefined, string]> = [[-2,"cancelled"],[-1,"uncertain"],[-15003,"uncertain"],[-15012,"uncertain"],[-15007,"session_key_expired"],[-15020,"rate_limited"],[-15021,"rate_limited"],[1001,"configuration_error"],[-15001,"configuration_error"],[-4,"risk_blocked"],[-15017,"risk_blocked"],[999,"failed"],[undefined,"failed"]];
     for (const [errCode, kind] of cases) { setWx({ getSystemInfoSync: () => ({ SDKVersion: "2.19.2" }), requestVirtualPayment: ({ fail }: any) => fail(errCode === undefined ? {} : { errCode, errMsg: "TEST_SECRET" }) }); await rejected(() => payment.invokeWechatVirtualPayment(params), kind); }
@@ -31,7 +34,10 @@ void (async () => {
     assert(!JSON.stringify(safeError).includes("TEST_SECRET") && !safeError.message.includes("TEST_SECRET"), "payment errors must not expose provider errMsg");
     let invoked = false; setWx(undefined); await rejected(() => payment.invokeWechatVirtualPayment(params), "unsupported"); assert(!invoked, "unsupported must not invoke");
     setWx({ getSystemInfoSync: () => ({ SDKVersion: "2.19.2" }), requestVirtualPayment: () => { invoked = true; throw new Error("TEST_SECRET"); } }); await rejected(() => payment.invokeWechatVirtualPayment(params), "failed"); assert(invoked, "sync throw classified");
+    setWx({ getSystemInfoSync: () => ({ SDKVersion: "2.19.2" }), requestVirtualPayment: () => undefined }); await rejected(() => payment.invokeWechatVirtualPayment(params, { timeoutMs: 0 }), "timeout");
+    assert(logs.some((items) => items.includes("virtual_payment_success")) && logs.some((items) => items.includes("virtual_payment_complete")) && logs.some((items) => items.includes("virtual_payment_sync_throw")) && logs.some((items) => items.includes("virtual_payment_timeout")), "safe diagnostics must cover callback, throw, and timeout paths");
+    assert(!JSON.stringify(logs).includes(params.signData) && !JSON.stringify(logs).includes(params.paySig) && !JSON.stringify(logs).includes(params.signature) && !JSON.stringify(logs).includes("TEST_SECRET"), "payment diagnostics must not expose payment parameters or provider details");
     assert(callbacks, "callbacks captured");
-  } finally { if (originalWx === undefined) delete (globalThis as { wx?: unknown }).wx; else (globalThis as { wx?: unknown }).wx = originalWx; }
+  } finally { console.info = originalConsoleInfo; if (originalWx === undefined) delete (globalThis as { wx?: unknown }).wx; else (globalThis as { wx?: unknown }).wx = originalWx; }
   console.log("Wechat virtual payment tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

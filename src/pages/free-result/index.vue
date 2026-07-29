@@ -51,6 +51,7 @@ const canPurchaseThisHistoryReport = computed(() => historyMode.value && isRefun
 const showConversionArea = computed(() => !report.value && hasFreeResult.value && (isRetryableLockedState.value || isRefunded.value) && (!historyMode.value || canPurchaseThisHistoryReport.value));
 const canPay = computed(() => showConversionArea.value && isWechatMiniapp.value && virtualPaymentSupported.value && !!proof.value && !!assessmentId.value);
 const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
+const paymentFailureNotice = computed(() => payment.value.safeCode === "PAYMENT_INVOKE_TIMEOUT" ? "未能调起支付，请重试" : "");
 
 function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -326,6 +327,7 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
         <button v-else-if="isWechatMiniapp && virtualPaymentSupported" class="inline-platform-button" disabled>正在准备你的专属报告</button>
         <button v-else class="inline-platform-button" disabled>¥19.9 解锁你的专属报告</button>
         <text v-if="!canPay && !paymentCapabilityUnavailable && !(isWechatMiniapp && virtualPaymentSupported)" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text>
+        <text v-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text>
         <text class="inline-purchase-copy">一次购买，长期查看本次报告</text>
       </view>
 
@@ -375,7 +377,7 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
     </view>
     <view v-else class="empty-card card"><text class="conclusion-title">结果暂不可用</text><text class="section-copy">{{ error }}</text></view>
 
-    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" :disabled="payment.busy" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">正在准备你的专属报告</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
+    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" :disabled="payment.busy" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">正在准备你的专属报告</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
   </view>
 </template>
 
