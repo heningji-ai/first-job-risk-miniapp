@@ -3,6 +3,7 @@ import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import { computed, ref, watch } from "vue";
 import { fetchGoalFitFreeResult, fetchGoalFitFullReport, fetchLatestGoalFitPurchase, GoalFitReportAccessError, type GoalFitFullReportResponse } from "@/api/goal-fit-payment";
 import { getPlatform } from "@/platform";
+import { isWechatVirtualPaymentSupported } from "@/services/wechat-virtual-payment";
 import { getDisplayFreeResult, readCompletedSession, readLatestCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
 import { recoverLatestAssessment, retryPendingAssessmentSync } from "@/services/assessment-sync";
 import { getActiveGoalFitVirtualPaymentState, invalidateGoalFitVirtualPaymentFlow, resumeManagedGoalFitVirtualPaymentConfirmation, startManagedGoalFitVirtualPayment, subscribeGoalFitVirtualPaymentState, type GoalFitVirtualPaymentState } from "@/services/goal-fit-virtual-payment-controller";
@@ -41,14 +42,15 @@ const valueCounts = computed(() => {
     { value: safe(counts?.questionCount), label: "面试确认问题" },
   ];
 });
-const isWechatAndroid = computed(() => {
-  if (getPlatform() !== "wechat_miniapp") return false;
-  try { return uni.getSystemInfoSync().platform === "android"; } catch { return false; }
-});
+const isWechatMiniapp = computed(() => getPlatform() === "wechat_miniapp");
+const virtualPaymentSupported = computed(() => isWechatMiniapp.value && isWechatVirtualPaymentSupported());
 const hasFreeResult = computed(() => !!result.value);
 const isRetryableLockedState = computed(() => access.value === "LOCKED" || access.value === "PAYMENT_CANCELLED" || access.value === "PAYMENT_FAILED");
-const showConversionArea = computed(() => !historyMode.value && !report.value && hasFreeResult.value && isRetryableLockedState.value);
-const canPay = computed(() => showConversionArea.value && isWechatAndroid.value && !!proof.value && !!assessmentId.value);
+const isRefunded = computed(() => access.value === "REFUNDED");
+const canPurchaseThisHistoryReport = computed(() => historyMode.value && isRefunded.value);
+const showConversionArea = computed(() => !report.value && hasFreeResult.value && (isRetryableLockedState.value || isRefunded.value) && (!historyMode.value || canPurchaseThisHistoryReport.value));
+const canPay = computed(() => showConversionArea.value && isWechatMiniapp.value && virtualPaymentSupported.value && !!proof.value && !!assessmentId.value);
+const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
 
 function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -74,7 +76,7 @@ watch([assessmentId, conversion], () => {
 
 function save(): void {
   if (!session) return;
-  session = {
+  const next: GoalFitCompletedSessionV1 = {
     ...session,
     assessmentId: assessmentId.value,
     reportSnapshotId: report.value?.reportSnapshotId ?? session.reportSnapshotId,
@@ -84,7 +86,18 @@ function save(): void {
     reportRecoveryPending: access.value === "ENTITLED_TEMPORARY_UNAVAILABLE",
     syncStatus: "completed",
   };
+  if (access.value === "REFUNDED") delete next.fullReport;
+  session = next;
   saveCompletedSession(session);
+}
+
+function setRefunded(requestedId: string): void {
+  if (!active || requestedId !== assessmentId.value) return;
+  report.value = null;
+  access.value = "REFUNDED";
+  historyEntitlementUncertain.value = false;
+  clearGoalFitHistoryReportRecovery(requestedId);
+  save();
 }
 
 function setUnlocked(value: GoalFitFullReportResponse): void {
@@ -107,6 +120,10 @@ async function readReport(recovery = false): Promise<void> {
     if (recovery) void trackEvent("goal_fit_report_recovery_success", { metadata: { recovery: true } });
   } catch (caught) {
     if (!active || assessmentId.value!==requestedId) return;
+    if (caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_REFUNDED") {
+      setRefunded(requestedId);
+      return;
+    }
     const temporary = caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_TEMPORARY_UNAVAILABLE";
     historyEntitlementUncertain.value = caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_NOT_ENTITLED" && historyMode.value;
     access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
@@ -135,14 +152,22 @@ async function load(id: string): Promise<void> {
       save();
     } catch { /* Free results remain available from local state if the refresh fails. */ }
   }
-  if (session?.fullReport && assessmentId.value) setUnlocked({ assessmentId: assessmentId.value, reportSnapshotId: session.reportSnapshotId ?? "", fullReport: session.fullReport });
-  else if (assessmentId.value && (session?.reportRecoveryPending || access.value !== "LOCKED")) await readReport(true);
+  if (assessmentId.value && (session?.reportRecoveryPending || access.value !== "LOCKED" || session?.fullReport)) await readReport(true);
   if (!result.value && getPlatform() === "wechat_miniapp") {
     try {
       const latest = await fetchLatestGoalFitPurchase();
       if (latest.purchase) {
         assessmentId.value = latest.purchase.assessmentId;
-        setUnlocked(latest.purchase);
+        if (latest.purchase.status === "REFUNDED") {
+          setRefunded(latest.purchase.assessmentId);
+          try {
+            const free = await fetchGoalFitFreeResult(latest.purchase.assessmentId);
+            if (active && assessmentId.value === latest.purchase.assessmentId) {
+              result.value = free.freeResult;
+              proof.value = free.freeResult.reportValueProof ?? null;
+            }
+          } catch { /* Refund state never fabricates a free result. */ }
+        } else setUnlocked(latest.purchase);
       }
     } catch { /* Latest purchase recovery must not block the free result. */ }
   }
@@ -296,11 +321,17 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
           <view v-for="item in valueCounts" :key="item.label" class="purchase-value-item"><text class="purchase-value-number">{{ item.value }}</text><text class="purchase-value-label">{{ item.label }}</text></view>
         </view>
         <view class="purchase-price"><text class="purchase-price-label">本次解锁价格</text><text class="purchase-price-value">¥19.9</text></view>
-        <button v-if="canPay" class="inline-unlock-button" :disabled="payment.busy" @click="unlock">¥19.9 解锁你的专属报告</button>
-        <button v-else-if="isWechatAndroid" class="inline-platform-button" disabled>正在准备你的专属报告</button>
+        <button v-if="canPay" class="inline-unlock-button" :disabled="payment.busy" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button>
+        <button v-else-if="paymentCapabilityUnavailable" class="inline-platform-button" disabled>当前微信版本暂不支持虚拟支付，请升级微信后重试</button>
+        <button v-else-if="isWechatMiniapp && virtualPaymentSupported" class="inline-platform-button" disabled>正在准备你的专属报告</button>
         <button v-else class="inline-platform-button" disabled>¥19.9 解锁你的专属报告</button>
-        <text v-if="!canPay && !isWechatAndroid" class="platform-copy">请在安卓微信中完成支付</text>
+        <text v-if="!canPay && !paymentCapabilityUnavailable && !(isWechatMiniapp && virtualPaymentSupported)" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text>
         <text class="inline-purchase-copy">一次购买，长期查看本次报告</text>
+      </view>
+
+      <view v-if="access === 'REFUNDED'" class="refund-card card">
+        <text class="section-title">该报告已退款</text>
+        <text class="section-copy">完整报告查看权限已关闭。你的测评结果概览仍然保留，也可以重新解锁这份专属报告。</text>
       </view>
 
       <view v-if="access === 'ENTITLED_TEMPORARY_UNAVAILABLE'" class="recovery-card card">
@@ -344,7 +375,7 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
     </view>
     <view v-else class="empty-card card"><text class="conclusion-title">结果暂不可用</text><text class="section-copy">{{ error }}</text></view>
 
-    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" :disabled="payment.busy" @click="unlock">¥19.9 解锁你的专属报告</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="!canPay && !isWechatAndroid" class="platform-copy">请在安卓微信中完成支付</text><text v-else-if="!canPay" class="cta-copy">正在准备你的专属报告</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
+    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" :disabled="payment.busy" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">正在准备你的专属报告</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
   </view>
 </template>
 

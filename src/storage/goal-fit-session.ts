@@ -3,7 +3,7 @@ import type { GoalFitReportValueProof, GoalFitFullReport } from "@/types/goal-fi
 
 const KEY = "first_job_goal_fit_completed_session_v1";
 export type AssessmentSyncStatus = "local_only" | "pending" | "syncing" | "completed";
-export type GoalFitReportAccessState = "LOCKED" | "PREPARING_PAYMENT" | "INVOKING_PAYMENT" | "CONFIRMING_PAYMENT" | "ENTITLED_LOADING" | "ENTITLED_TEMPORARY_UNAVAILABLE" | "UNLOCKED_V2" | "UNLOCKED_LEGACY" | "PAYMENT_CANCELLED" | "PAYMENT_FAILED";
+export type GoalFitReportAccessState = "LOCKED" | "PREPARING_PAYMENT" | "INVOKING_PAYMENT" | "CONFIRMING_PAYMENT" | "ENTITLED_LOADING" | "ENTITLED_TEMPORARY_UNAVAILABLE" | "UNLOCKED_V2" | "UNLOCKED_LEGACY" | "PAYMENT_CANCELLED" | "PAYMENT_FAILED" | "REFUNDED";
 export type AssessmentVersions = { questionSetVersion: string; scoringVersion: string; reportVersion: string };
 export type OfficialFreeResult = { overallScore: number; overallConclusion: GoalFitResult["overallConclusion"]; primaryRisk: { title: string; description: string }; riskInsights: Array<{ title: string; description: string }>; recommendations: Array<{ title: string; description: string }> };
 export interface GoalFitCompletedSessionV1 {

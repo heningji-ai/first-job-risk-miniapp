@@ -22,7 +22,7 @@ for (const token of [
   "入职前准备建议",
   "第一个月行动提醒",
   "¥19.9 解锁你的专属报告",
-  "请在安卓微信中完成支付",
+  "请在支持虚拟支付的微信客户端中完成支付",
   "fixed-cta",
   "safe-area-inset-bottom",
   "ENTITLED_TEMPORARY_UNAVAILABLE",
@@ -33,6 +33,8 @@ for (const token of [
   "showConversionArea",
   "PAYMENT_CANCELLED",
   "PAYMENT_FAILED",
+  "REFUNDED",
+  "FULL_REPORT_REFUNDED",
   "正在准备你的专属报告",
   "UNLOCKED_LEGACY",
   "fetchLatestGoalFitPurchase",
@@ -40,17 +42,22 @@ for (const token of [
 ]) assert(source.includes(token), `missing free-result layout contract: ${token}`);
 
 assert(source.includes("access.value === \"LOCKED\" || access.value === \"PAYMENT_CANCELLED\" || access.value === \"PAYMENT_FAILED\""), "only explicit retryable locked states may show conversion");
-assert(source.includes("!historyMode.value && !report.value && hasFreeResult.value && isRetryableLockedState.value"), "conversion area must require a free result and explicit retryable state");
-assert(source.includes("showConversionArea.value && isWechatAndroid.value && !!proof.value && !!assessmentId.value"), "Android payment CTA must require complete payment prerequisites");
+assert(source.includes("isRefunded") && source.includes("canPurchaseThisHistoryReport"), "refunded history reports must be the sole history-mode repurchase exception");
+assert(source.includes("!report.value && hasFreeResult.value") && source.includes("!historyMode.value || canPurchaseThisHistoryReport.value"), "conversion area must require a free result, an explicit purchasable state, and history isolation");
+assert(source.includes("showConversionArea.value && isWechatMiniapp.value && virtualPaymentSupported.value && !!proof.value && !!assessmentId.value"), "all-terminal payment CTA must require miniapp capability and complete payment prerequisites");
 assert(source.includes("outcome === null && !historyMode.value && !report.value") && source.includes("access.value = \"LOCKED\""), "a no-pending resume must restore a transient payment state to locked");
-assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "Android conversion must retain a body purchase entry in addition to the fixed CTA");
+assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "all-terminal conversion must retain a body purchase entry in addition to the fixed CTA");
 assert(source.includes("v-if=\"showConversionArea\" class=\"inline-purchase card\""), "every conversion state must render the body purchase card");
 assert(source.includes("purchase-value-grid") && source.includes("purchase-price-value"), "the purchase card must render proof counts and the fixed price");
-assert(source.includes("v-else-if=\"isWechatAndroid\"") && source.includes("class=\"inline-platform-button\""), "non-Android must display a non-payment platform action while Android without prerequisites prepares eligibility");
+assert(source.includes("paymentCapabilityUnavailable") && source.includes("class=\"inline-platform-button\""), "unsupported WeChat capability must render a safe platform action");
 assert(source.includes("<view v-if=\"showConversionArea\" class=\"fixed-cta\""), "the fixed CTA must remain visible throughout every conversion state");
 assert(source.includes("fixed-value-copy") && source.includes("valueCounts[0].value") && source.includes("valueCounts[1].value") && source.includes("valueCounts[2].value"), "the fixed CTA must render proof-derived value counts from the first screen");
-assert(source.includes("<button v-if=\"canPay\" class=\"unlock-button\"") && source.includes("<button v-else class=\"unlock-button\" disabled>"), "only Android canPay may invoke payment while non-Android keeps a disabled product CTA");
-assert(source.includes("platform-copy") && source.includes("请在安卓微信中完成支付"), "the Android platform requirement must remain supporting copy, not the primary CTA");
+assert(source.includes("<button v-if=\"canPay\" class=\"unlock-button\"") && source.includes("<button v-else class=\"unlock-button\" disabled>"), "only capability-qualified miniapp payment may invoke the product CTA");
+assert(source.includes("请在支持虚拟支付的微信客户端中完成支付"), "unsupported environments must use a neutral virtual-payment prompt");
+assert(!source.includes("isWechatAndroid") && !source.includes("安卓微信"), "payment eligibility and copy must not be Android-specific");
+assert(source.includes("FULL_REPORT_REFUNDED") && source.includes("function setRefunded") && source.includes("access.value = \"REFUNDED\""), "refunded full reports must clear report access without exposing cached content");
+assert(source.includes("delete next.fullReport"), "refund handling must remove persisted full-report cache");
+assert(source.includes("¥19.9 重新解锁专属报告") && source.includes("该报告已退款"), "refunded reports must expose an explicit repurchase state");
 assert(source.includes("proof && (!report || (conversion && activePaidView === 'overview'))"), "free preview must render only for the free page or purchased overview view");
 assert(source.includes("const displayOverallScore = computed<number | null>"), "overall score must be read from the free-result contract and safely normalized for display");
 assert(source.includes("result.value?.overallScore"), "overall score must come from the displayed free result");

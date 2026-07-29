@@ -16,7 +16,9 @@ for (const token of [
   "isOfficialAssessmentId",
   "/^asm_[A-Za-z0-9_-]{8,}$/",
   "purchases.every(isPurchaseListItem)",
-  "item.unlocked === true",
+  '"REFUNDED"',
+  "item.unlocked === false",
+  "revokedAt",
 ]) assert(api.includes(token) || types.includes(token), `missing purchases contract: ${token}`);
 assert(!api.includes("assessment_"), "local assessment IDs must not be accepted by purchases parsing");
 console.log("Goal Fit purchases API contract tests passed.");

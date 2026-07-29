@@ -18,7 +18,7 @@ void (async () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const payment = require("../src/api/goal-fit-payment") as typeof import("../src/api/goal-fit-payment");
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { request } = require("../src/api/request") as typeof import("../src/api/request");
+  const { ApiError, request } = require("../src/api/request") as typeof import("../src/api/request");
   const calls: RequestCall[] = [];
   const prepareResponse = {
     orderId: "order_123",
@@ -37,6 +37,7 @@ void (async () => {
   let response: unknown = { ...prepareResponse, unexpected: "discard" };
   const mockRequest = (async (options: RequestCall) => {
     calls.push(options);
+    if (response instanceof Error) throw response;
     return response;
   }) as typeof request;
 
@@ -82,9 +83,16 @@ void (async () => {
     assert((await payment.fetchGoalFitFullReport("asm/a b")).fullReport === fullReport, "full report response must preserve the server wrapper");
     assert(calls.at(-1)?.path === "/api/miniapp/goal-fit/assessments/asm%2Fa%20b/full-report" && calls.at(-1)?.method === undefined, "full report must use encoded GET path");
 
-    response = { purchase: { assessmentId: "asm_1", reportSnapshotId: "rpt_1", fullReport } };
+    response = { purchase: { assessmentId: "asm_1", reportSnapshotId: "rpt_1", status: "ACTIVE", unlocked: true, fullReport } };
     assert((await payment.fetchLatestGoalFitPurchase()).purchase?.assessmentId === "asm_1", "latest purchase must preserve active entitlement report");
     assert(calls.at(-1)?.path === "/api/miniapp/goal-fit/purchases/latest", "latest purchase must use the protected recovery endpoint");
+
+    response = { purchase: { assessmentId: "asm_refunded_123456", reportSnapshotId: "rpt_1", status: "REFUNDED", unlocked: false, revokedAt: "2026-07-29T00:00:00.000Z", fullReport: null } };
+    const refunded = await payment.fetchLatestGoalFitPurchase();
+    assert(refunded.purchase?.status === "REFUNDED" && refunded.purchase.unlocked === false, "latest purchase must preserve the refunded entitlement contract without report content");
+
+    response = new ApiError("FULL_REPORT_REFUNDED", { statusCode: 403 });
+    await rejects(() => payment.fetchGoalFitFullReport("asm_refunded_123456"), "FULL_REPORT_REFUNDED");
 
     const callCount = calls.length;
     await rejects(() => payment.prepareGoalFitVirtualPayment("", { code: "code", requestId: "request" }), "INVALID_VIRTUAL_PAYMENT_RESPONSE");

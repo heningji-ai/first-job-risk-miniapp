@@ -1,7 +1,7 @@
 import { ApiError, request } from "@/api/request";
 import type { GoalFitResult } from "@/domain/goal-fit/types";
-import type { GoalFitApiError, GoalFitFreeResultResponse, GoalFitFullReportResponse, GoalFitPurchaseListItem, GoalFitPurchaseListResponse } from "@/types/goal-fit-report-conversion";
-export type { GoalFitFullReportResponse, GoalFitFreeResultResponse, GoalFitPurchaseListItem, GoalFitPurchaseListResponse } from "@/types/goal-fit-report-conversion";
+import type { GoalFitApiError, GoalFitFreeResultResponse, GoalFitFullReportResponse, GoalFitLatestPurchase, GoalFitPurchaseListItem, GoalFitPurchaseListResponse } from "@/types/goal-fit-report-conversion";
+export type { GoalFitFullReportResponse, GoalFitFreeResultResponse, GoalFitLatestPurchase, GoalFitPurchaseListItem, GoalFitPurchaseListResponse } from "@/types/goal-fit-report-conversion";
 
 type PaymentRequestClient = typeof request;
 
@@ -22,7 +22,7 @@ export type GoalFitPaymentConfirmation = {
   assessmentId?: string;
 };
 
-export type LatestGoalFitPurchaseResponse = { purchase: GoalFitFullReportResponse | null };
+export type LatestGoalFitPurchaseResponse = { purchase: GoalFitLatestPurchase | null };
 
 type PaymentContractErrorCode =
   | "INVALID_VIRTUAL_PAYMENT_RESPONSE"
@@ -67,7 +67,10 @@ function isPurchaseListItem(value: unknown): value is GoalFitPurchaseListItem {
     && isNonEmptyString(item.completedAt)
     && !Number.isNaN(Date.parse(item.completedAt))
     && isOptionalString(item.primaryConclusion)
-    && item.unlocked === true
+    && ["ACTIVE", "REFUNDED", "REVOKED"].includes(String(item.status))
+    && typeof item.unlocked === "boolean"
+    && ((item.status === "ACTIVE" && item.unlocked === true) || (item.status !== "ACTIVE" && item.unlocked === false))
+    && (item.revokedAt === null || isNonEmptyString(item.revokedAt))
     && isOptionalString(item.copyVersion)
     && isOptionalString(item.mappingVersion);
 }
@@ -158,10 +161,22 @@ function isFullReportResponse(value: unknown): value is GoalFitFullReportRespons
     && Boolean(report && typeof report === "object" && (Boolean(report.reportConversion) || (typeof legacy?.scores?.overallScore === "number" && isNonEmptyString(legacy.overallConclusion?.title) && Array.isArray(legacy.riskInsights) && Array.isArray(legacy.recommendations) && Array.isArray(legacy.cards))));
 }
 
+function isLatestPurchase(value: unknown): value is GoalFitLatestPurchase {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  if (item.status === "ACTIVE" && item.unlocked === true) return isFullReportResponse(item);
+  return item.status === "REFUNDED"
+    && item.unlocked === false
+    && isOfficialAssessmentId(item.assessmentId)
+    && isNonEmptyString(item.reportSnapshotId)
+    && item.fullReport === null
+    && (item.revokedAt === null || isNonEmptyString(item.revokedAt) || item.refundedAt === null || isNonEmptyString(item.refundedAt));
+}
+
 export class GoalFitReportAccessError extends ApiError { constructor(readonly code: GoalFitApiError, statusCode: number) { super(code, { statusCode }); this.name = "GoalFitReportAccessError"; } }
 
 function translateReportError(error: unknown): never {
-  if (error instanceof ApiError && (error.message === "FULL_REPORT_NOT_ENTITLED" || error.message === "FULL_REPORT_TEMPORARY_UNAVAILABLE")) throw new GoalFitReportAccessError(error.message, error.statusCode ?? 0);
+  if (error instanceof ApiError && (error.message === "FULL_REPORT_NOT_ENTITLED" || error.message === "FULL_REPORT_TEMPORARY_UNAVAILABLE" || error.message === "FULL_REPORT_REFUNDED")) throw new GoalFitReportAccessError(error.message, error.statusCode ?? 0);
   throw error;
 }
 
@@ -194,7 +209,7 @@ export async function fetchLatestGoalFitPurchase(): Promise<LatestGoalFitPurchas
     requiresMiniappAuth: true,
   });
   const value = response as Partial<LatestGoalFitPurchaseResponse>;
-  if (value.purchase !== null && !isFullReportResponse(value.purchase)) {
+  if (value.purchase !== null && !isLatestPurchase(value.purchase)) {
     throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
   }
   return { purchase: value.purchase ?? null };
