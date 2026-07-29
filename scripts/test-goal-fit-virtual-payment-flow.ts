@@ -3,8 +3,12 @@ type Confirmation = { paymentAttemptId: string; orderId: string; status: "pendin
 void (async () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const flow = require("../src/services/goal-fit-virtual-payment-flow") as typeof import("../src/services/goal-fit-virtual-payment-flow");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const payment = require("../src/services/wechat-virtual-payment") as typeof import("../src/services/wechat-virtual-payment");
   const prepared = { orderId: "order_1", paymentAttemptId: "attempt_1", mode: "short_series_goods" as const, signData: "opaque-sign-data", paySig: "pay-sig", signature: "signature" };
   const pending: unknown[] = []; const clears: unknown[] = []; const delays: number[] = []; const calls: string[] = [];
+  const diagnostics: Array<{ name: string; metadata: Record<string, unknown> }> = [];
+  payment.setWechatVirtualPaymentDiagnosticTrackerForTest(async (name, options) => { diagnostics.push({ name, metadata: options.metadata ?? {} }); });
   const base = (confirmations: Array<Confirmation | Error> = [{ ...prepared, paymentAttemptId: "attempt_1", status: "paid", reportAvailable: true } as Confirmation]) => ({
     supportCheck: () => true,
     loginCodeProvider: async () => { calls.push("login"); return "code"; },
@@ -22,6 +26,9 @@ void (async () => {
     assert(normal.status === "paid" && normal.report && !Object.keys(normal).some((key) => ["requestId", "signData", "paySig", "signature"].includes(key)), "paid requires report and hides payment params");
     assert(JSON.stringify(pending[0]) === JSON.stringify({ assessmentId: "asm_1", paymentAttemptId: "attempt_1", createdAt: 1000 }) && clears.length === 1, "save before invoke and clear after report");
     assert(calls.join(",") === "login,prepare:asm_1:code,invoke,confirm,report", "normal sequence");
+    assert(diagnostics.some((event) => event.name === "payment_prepare_started") && diagnostics.some((event) => event.name === "payment_prepare_succeeded"), "prepare diagnostics must reach analytics");
+    const succeeded = diagnostics.find((event) => event.name === "payment_prepare_succeeded");
+    assert(succeeded?.metadata.assessmentIdSuffix === "asm_1" && succeeded.metadata.paymentAttemptIdSuffix === "empt_1" && typeof succeeded.metadata.requestIdSuffix === "string", "prepare diagnostics must use suffix-only correlation ids");
 
     calls.length = pending.length = clears.length = delays.length = 0;
     const pendingResult = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: base(Array.from({ length: 5 }, () => ({ paymentAttemptId: "attempt_1", orderId: "order", status: "pending" as const, reportAvailable: false }))) });
@@ -66,6 +73,6 @@ void (async () => {
     assert(retryAfterTimeout.status === "failed" && retryAfterTimeoutAgain.status === "failed" && requestCounter === 2, "each retry after timeout must create a fresh request id");
     const bad = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "" });
     assert(bad.status === "failed" && bad.safeCode === "INVALID_ASSESSMENT_ID", "invalid assessment safe failure");
-  } finally { /* injected dependencies own all resources */ }
+  } finally { payment.setWechatVirtualPaymentDiagnosticTrackerForTest(); /* injected dependencies own all resources */ }
   console.log("Goal Fit virtual payment flow tests passed.");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -12,8 +12,10 @@ import {
 import {
   invokeWechatVirtualPayment,
   isWechatVirtualPaymentSupported,
+  reportGoalFitVirtualPaymentDiagnostic,
   requestWechatLoginCode,
   type WechatVirtualPaymentFailureKind,
+  type WechatVirtualPaymentDiagnosticContext,
   type WechatVirtualPaymentInvocationParams,
 } from "@/services/wechat-virtual-payment";
 
@@ -42,7 +44,7 @@ export type GoalFitVirtualPaymentFlowDependencies<TReport> = {
   supportCheck: () => boolean;
   loginCodeProvider: () => Promise<string>;
   preparePayment: (assessmentId: string, input: { code: string; requestId: string }) => Promise<GoalFitVirtualPaymentParams>;
-  invokePayment: (params: WechatVirtualPaymentInvocationParams) => Promise<unknown>;
+  invokePayment: (params: WechatVirtualPaymentInvocationParams, diagnosticContext?: WechatVirtualPaymentDiagnosticContext) => Promise<unknown>;
   confirmPayment: (paymentAttemptId: string) => Promise<GoalFitPaymentConfirmation>;
   fetchFullReport: (assessmentId: string) => Promise<TReport>;
   savePending: (record: { assessmentId: string; paymentAttemptId: string; createdAt?: number }) => boolean;
@@ -65,7 +67,7 @@ function defaultDependencies<TReport>(): GoalFitVirtualPaymentFlowDependencies<T
     supportCheck: isWechatVirtualPaymentSupported,
     loginCodeProvider: requestWechatLoginCode,
     preparePayment: prepareGoalFitVirtualPayment,
-    invokePayment: invokeWechatVirtualPayment,
+    invokePayment: (params, diagnosticContext) => invokeWechatVirtualPayment(params, { diagnosticContext }),
     confirmPayment: confirmGoalFitVirtualPayment,
     fetchFullReport: fetchGoalFitFullReport as () => Promise<TReport>,
     savePending: savePendingGoalFitPaymentConfirmation,
@@ -114,10 +116,12 @@ function stale<TReport>(assessmentId: string): GoalFitVirtualPaymentFlowResult<T
   return result("failed", assessmentId, { safeCode: "PAYMENT_FLOW_STALE" });
 }
 
-function reportPaymentFlowDiagnostic(event: "payment_prepare_started" | "payment_prepare_succeeded", assessmentId: string, paymentAttemptId?: string): void {
-  const details: Record<string, string> = { assessmentIdSuffix: assessmentId.slice(-6) };
-  if (paymentAttemptId) details.paymentAttemptIdSuffix = paymentAttemptId.slice(-6);
-  try { console.info("[goal-fit-payment]", event, details); } catch { /* console availability cannot affect payment */ }
+function paymentDiagnosticContext(assessmentId: string, requestId: string, paymentAttemptId?: string): WechatVirtualPaymentDiagnosticContext {
+  return {
+    assessmentIdSuffix: assessmentId.slice(-6),
+    requestIdSuffix: requestId.slice(-6),
+    ...(paymentAttemptId ? { paymentAttemptIdSuffix: paymentAttemptId.slice(-6) } : {}),
+  };
 }
 
 export async function confirmAndLoadGoalFitVirtualPayment<TReport>(assessmentId: string, paymentAttemptId: string, dependencies: GoalFitVirtualPaymentFlowDependencies<TReport>): Promise<GoalFitVirtualPaymentFlowResult<TReport>> {
@@ -164,10 +168,11 @@ export async function startGoalFitVirtualPaymentFlow<TReport = unknown>(options:
   try { code = await dependencies.loginCodeProvider(); } catch { return result("failed", assessmentId, { safeCode: "LOGIN_FAILED" }); }
   if (!dependencies.isFlowActive()) return stale(assessmentId);
   let prepared: GoalFitVirtualPaymentParams;
+  const requestId = options.requestId ?? dependencies.requestIdFactory();
   try {
-    reportPaymentFlowDiagnostic("payment_prepare_started", assessmentId);
-    prepared = await dependencies.preparePayment(assessmentId, { code, requestId: options.requestId ?? dependencies.requestIdFactory() });
-    reportPaymentFlowDiagnostic("payment_prepare_succeeded", assessmentId, prepared.paymentAttemptId);
+    reportGoalFitVirtualPaymentDiagnostic("payment_prepare_started", paymentDiagnosticContext(assessmentId, requestId));
+    prepared = await dependencies.preparePayment(assessmentId, { code, requestId });
+    reportGoalFitVirtualPaymentDiagnostic("payment_prepare_succeeded", paymentDiagnosticContext(assessmentId, requestId, prepared.paymentAttemptId));
   } catch (error) {
     if ((error as Error)?.message === "ALREADY_PURCHASED") {
       try {
@@ -182,7 +187,7 @@ export async function startGoalFitVirtualPaymentFlow<TReport = unknown>(options:
   if (!dependencies.isFlowActive()) return stale(assessmentId);
   dependencies.onStateChange("invoking");
   try {
-    await dependencies.invokePayment({ mode: prepared.mode, signData: prepared.signData, paySig: prepared.paySig, signature: prepared.signature });
+    await dependencies.invokePayment({ mode: prepared.mode, signData: prepared.signData, paySig: prepared.paySig, signature: prepared.signature }, paymentDiagnosticContext(assessmentId, requestId, prepared.paymentAttemptId));
   } catch (error) {
     if (!dependencies.isFlowActive()) return stale(assessmentId);
     const kind = failureKind(error) ?? "failed";
