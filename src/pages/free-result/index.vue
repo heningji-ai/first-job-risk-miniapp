@@ -4,8 +4,8 @@ import { computed, ref, watch } from "vue";
 import { fetchGoalFitFreeResult, fetchGoalFitFullReport, fetchLatestGoalFitPurchase, GoalFitReportAccessError, type GoalFitFullReportResponse } from "@/api/goal-fit-payment";
 import { getPlatform } from "@/platform";
 import { isWechatVirtualPaymentSupported } from "@/services/wechat-virtual-payment";
-import { getDisplayFreeResult, readCompletedSession, readLatestCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
-import { recoverLatestAssessment, retryPendingAssessmentSync } from "@/services/assessment-sync";
+import { getDisplayFreeResult, readCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
+import { retryPendingAssessmentSync } from "@/services/assessment-sync";
 import { getActiveGoalFitVirtualPaymentState, invalidateGoalFitVirtualPaymentFlow, resumeManagedGoalFitVirtualPaymentConfirmation, startManagedGoalFitVirtualPayment, subscribeGoalFitVirtualPaymentState, type GoalFitVirtualPaymentState } from "@/services/goal-fit-virtual-payment-controller";
 import { hasReportConversion, type GoalFitReportConversion, type GoalFitReportValueProof, type GoalFitSelectedRiskPreview } from "@/types/goal-fit-report-conversion";
 import { trackEvent } from "@/analytics";
@@ -16,6 +16,11 @@ const proof = ref<GoalFitReportValueProof | null>(null);
 const report = ref<GoalFitFullReportResponse | null>(null);
 const assessmentId = ref("");
 const error = ref("");
+const pageState = ref<"idle" | "loading" | "ready" | "error">("idle");
+const purchaseStateLoaded = ref(false);
+const resultAssessmentId = ref("");
+const proofAssessmentId = ref("");
+const snapshotAssessmentId = ref("");
 const access = ref<GoalFitReportAccessState>("LOCKED");
 const payment = ref<GoalFitVirtualPaymentState>(getActiveGoalFitVirtualPaymentState());
 const expanded = ref(0);
@@ -26,6 +31,8 @@ let session: GoalFitCompletedSessionV1 | null = null;
 let active = true;
 let unsub: (() => void) | undefined;
 let autoRetries = 0;
+let loadVersion = 0;
+let lastCanPay = false;
 
 const conversion = computed<GoalFitReportConversion | null>(() => report.value && hasReportConversion(report.value.fullReport) ? report.value.fullReport.reportConversion : null);
 const displayOverallScore = computed<number | null>(() => {
@@ -48,13 +55,24 @@ const hasFreeResult = computed(() => !!result.value);
 const isRetryableLockedState = computed(() => access.value === "LOCKED" || access.value === "PAYMENT_CANCELLED" || access.value === "PAYMENT_FAILED");
 const isRefunded = computed(() => access.value === "REFUNDED");
 const canPurchaseThisHistoryReport = computed(() => historyMode.value && isRefunded.value);
-const showConversionArea = computed(() => !report.value && hasFreeResult.value && (isRetryableLockedState.value || isRefunded.value) && (!historyMode.value || canPurchaseThisHistoryReport.value));
-const canPay = computed(() => showConversionArea.value && isWechatMiniapp.value && virtualPaymentSupported.value && !!proof.value && !!assessmentId.value);
+const showConversionArea = computed(() => pageState.value === "ready" && !report.value && hasFreeResult.value && (isRetryableLockedState.value || isRefunded.value) && (!historyMode.value || canPurchaseThisHistoryReport.value));
+const hasStablePaymentContext = computed(() => /^asm_[A-Za-z0-9_-]{8,}$/.test(assessmentId.value) && resultAssessmentId.value === assessmentId.value && proofAssessmentId.value === assessmentId.value && snapshotAssessmentId.value === assessmentId.value && !!proof.value && purchaseStateLoaded.value);
+const canPay = computed(() => showConversionArea.value && isWechatMiniapp.value && virtualPaymentSupported.value && hasStablePaymentContext.value && !payment.value.busy);
 const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
 const paymentFailureNotice = computed(() => payment.value.safeCode === "PAYMENT_INVOKE_TIMEOUT" ? "未能调起支付，请重试" : "");
 
 function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function suffix(value: string | undefined): string | undefined { return value?.slice(-6); }
+function diagnostic(event: "free_result_page_mounted" | "free_result_fetch_started" | "free_result_fetch_succeeded" | "free_result_fetch_failed" | "free_result_ready" | "payment_button_enabled" | "assessment_context_mismatch", metadata: { source?: string; httpStatus?: number; retryCount?: number; elapsedMs?: number; errorMessageCategory?: string; contextMatch?: boolean } = {}): void {
+  void trackEvent(event, { metadata: { assessmentIdSuffix: suffix(assessmentId.value), sessionIdSuffix: suffix(session?.id), reportSnapshotIdSuffix: suffix(session?.reportSnapshotId), source: metadata.source, httpStatus: metadata.httpStatus, retryCount: metadata.retryCount, elapsedMs: metadata.elapsedMs, pageState: pageState.value, purchaseStateLoaded: purchaseStateLoaded.value, contextMatch: metadata.contextMatch, errorMessageCategory: metadata.errorMessageCategory } });
+}
+function contextMismatch(source: string): void {
+  diagnostic("assessment_context_mismatch", { source, contextMatch: false, errorMessageCategory: "ASSESSMENT_CONTEXT_MISMATCH" });
+  pageState.value = "error";
+  error.value = "当前结果与测评记录不一致，请重新加载";
 }
 
 function hasItems(value: unknown): value is string[] {
@@ -73,6 +91,10 @@ function switchPaidView(view: "overview" | "full"): void {
 watch([assessmentId, conversion], () => {
   expanded.value = 0;
   activePaidView.value = "full";
+});
+watch(canPay, (value) => {
+  if (value && !lastCanPay) diagnostic("payment_button_enabled", { source: "free_result", contextMatch: true });
+  lastCanPay = value;
 });
 
 function save(): void {
@@ -134,49 +156,87 @@ async function readReport(recovery = false): Promise<void> {
   }
 }
 
-async function load(id: string): Promise<void> {
-  session = id ? readCompletedSession(id) : readLatestCompletedSession();
-  if (!session) session = await recoverLatestAssessment();
-  else if (!session.assessmentId) {
-    await retryPendingAssessmentSync();
-    session = id ? readCompletedSession(id) : readLatestCompletedSession();
+async function load(sessionId: string, routeAssessmentId: string): Promise<void> {
+  const requestVersion = ++loadVersion;
+  const startedAt = Date.now();
+  pageState.value = "loading";
+  error.value = "";
+  purchaseStateLoaded.value = false;
+  result.value = null;
+  proof.value = null;
+  report.value = null;
+  resultAssessmentId.value = "";
+  proofAssessmentId.value = "";
+  snapshotAssessmentId.value = "";
+  diagnostic("free_result_fetch_started", { source: sessionId ? "route_session" : "route_assessment", retryCount: autoRetries });
+  session = sessionId ? readCompletedSession(sessionId) : routeAssessmentId ? readCompletedSession(routeAssessmentId) : null;
+  if (!session && sessionId) {
+    error.value = "未找到本次测评结果，请重新加载";
+    pageState.value = "error";
+    diagnostic("free_result_fetch_failed", { source: "route_session", elapsedMs: Date.now() - startedAt, errorMessageCategory: "SESSION_NOT_FOUND" });
+    return;
   }
-  result.value = session ? getDisplayFreeResult(session) : null;
-  assessmentId.value = session?.assessmentId?.startsWith("asm_") ? session.assessmentId : "";
-  proof.value = session?.serverFreeResult?.reportValueProof ?? null;
+  if (session && routeAssessmentId && session.assessmentId && session.assessmentId !== routeAssessmentId) { contextMismatch("route_storage"); return; }
+  if (session && !session.assessmentId) {
+    const synced = await retryPendingAssessmentSync();
+    if (!active || requestVersion !== loadVersion) return;
+    session = sessionId ? readCompletedSession(sessionId) : synced;
+  }
+  const authoritativeId = routeAssessmentId || session?.assessmentId || "";
+  if (!/^asm_[A-Za-z0-9_-]{8,}$/.test(authoritativeId)) {
+    error.value = "结果仍在生成，请稍后重新加载";
+    pageState.value = "error";
+    diagnostic("free_result_fetch_failed", { source: "route", elapsedMs: Date.now() - startedAt, errorMessageCategory: "ASSESSMENT_ID_UNAVAILABLE" });
+    return;
+  }
+  assessmentId.value = authoritativeId;
   access.value = session?.reportAccessState ?? "LOCKED";
-  if (assessmentId.value && !proof.value) {
-    try {
-      const free = await fetchGoalFitFreeResult(assessmentId.value);
-      result.value = free.freeResult;
-      proof.value = free.freeResult.reportValueProof ?? null;
-      save();
-    } catch { /* Free results remain available from local state if the refresh fails. */ }
+  if (session?.assessmentId && session.assessmentId !== authoritativeId) { contextMismatch("session_assessment"); return; }
+  result.value = session ? getDisplayFreeResult(session) : null;
+  proof.value = session?.serverFreeResult?.reportValueProof ?? null;
+  if (result.value) resultAssessmentId.value = authoritativeId;
+  if (proof.value) proofAssessmentId.value = authoritativeId;
+  if (session?.reportSnapshotId) snapshotAssessmentId.value = authoritativeId;
+  try {
+    const free = await fetchGoalFitFreeResult(authoritativeId);
+    if (!active || requestVersion !== loadVersion || assessmentId.value !== authoritativeId || free.assessmentId !== authoritativeId) { if (active && free.assessmentId !== authoritativeId) contextMismatch("free_result_response"); return; }
+    result.value = free.freeResult;
+    proof.value = free.freeResult.reportValueProof ?? null;
+    resultAssessmentId.value = authoritativeId;
+    proofAssessmentId.value = proof.value ? authoritativeId : "";
+    if (session && free.reportSnapshotId) { session = { ...session, reportSnapshotId: free.reportSnapshotId, serverFreeResult: free.freeResult, syncStatus: "completed" }; snapshotAssessmentId.value = authoritativeId; save(); }
+    diagnostic("free_result_fetch_succeeded", { source: "api", elapsedMs: Date.now() - startedAt, contextMatch: true });
+  } catch {
+    if (!result.value || !proof.value) {
+      error.value = "结果暂时无法加载";
+      pageState.value = "error";
+      diagnostic("free_result_fetch_failed", { source: "api", elapsedMs: Date.now() - startedAt, errorMessageCategory: "FREE_RESULT_FETCH_FAILED" });
+      return;
+    }
   }
-  if (assessmentId.value && (session?.reportRecoveryPending || access.value !== "LOCKED" || session?.fullReport)) await readReport(true);
-  if (!result.value && getPlatform() === "wechat_miniapp") {
-    try {
-      const latest = await fetchLatestGoalFitPurchase();
-      if (latest.purchase) {
-        assessmentId.value = latest.purchase.assessmentId;
-        if (latest.purchase.status === "REFUNDED") {
-          setRefunded(latest.purchase.assessmentId);
-          try {
-            const free = await fetchGoalFitFreeResult(latest.purchase.assessmentId);
-            if (active && assessmentId.value === latest.purchase.assessmentId) {
-              result.value = free.freeResult;
-              proof.value = free.freeResult.reportValueProof ?? null;
-            }
-          } catch { /* Refund state never fabricates a free result. */ }
-        } else setUnlocked(latest.purchase);
-      }
-    } catch { /* Latest purchase recovery must not block the free result. */ }
+  try {
+    const latest = await fetchLatestGoalFitPurchase();
+    if (!active || requestVersion !== loadVersion || assessmentId.value !== authoritativeId) return;
+    purchaseStateLoaded.value = true;
+    if (latest.purchase && latest.purchase.assessmentId === authoritativeId) {
+      if (latest.purchase.status === "REFUNDED") setRefunded(authoritativeId);
+      else setUnlocked(latest.purchase);
+    }
+  } catch { purchaseStateLoaded.value = true; }
+  if (!active || requestVersion !== loadVersion) return;
+  if (session?.reportRecoveryPending || (access.value !== "LOCKED" && access.value !== "REFUNDED") || session?.fullReport) await readReport(true);
+  if (!active || requestVersion !== loadVersion) return;
+  pageState.value = result.value ? "ready" : "error";
+  if (pageState.value === "ready") {
+    diagnostic("free_result_ready", { source: "api", elapsedMs: Date.now() - startedAt, contextMatch: true });
+    if (proof.value) void trackEvent("goal_fit_report_value_proof_view", { metadata: { reportType: proof.value.reportType, mappingVersion: proof.value.mappingVersion, riskModuleCount: proof.value.selectedRiskModules.length } });
   }
-  if (!result.value) error.value = "结果暂不可用，请重新开始测试。";
-  if (proof.value) void trackEvent("goal_fit_report_value_proof_view", { metadata: { reportType: proof.value.reportType, mappingVersion: proof.value.mappingVersion, riskModuleCount: proof.value.selectedRiskModules.length } });
 }
 
 async function loadHistory(id: string): Promise<void> {
+  const requestVersion = ++loadVersion;
+  pageState.value = "loading";
+  purchaseStateLoaded.value = false;
   historyMode.value = true;
   historyEntitlementUncertain.value = false;
   session = null;
@@ -188,14 +248,19 @@ async function loadHistory(id: string): Promise<void> {
   saveGoalFitHistoryReportRecovery({ assessmentId: id, recoveryPending: false });
   try {
     const free = await fetchGoalFitFreeResult(id);
-    if (!active || assessmentId.value !== id) return;
+    if (!active || requestVersion !== loadVersion || assessmentId.value !== id || free.assessmentId !== id) { if (active && free.assessmentId !== id) contextMismatch("history_free_result"); return; }
     result.value = free.freeResult;
     proof.value = free.freeResult.reportValueProof ?? null;
+    resultAssessmentId.value = id;
+    proofAssessmentId.value = proof.value ? id : "";
+    snapshotAssessmentId.value = free.reportSnapshotId ? id : "";
   } catch {
     if (!active || assessmentId.value !== id) return;
     error.value = "报告权益状态暂时无法确认，请重新加载。";
   }
+  purchaseStateLoaded.value = true;
   await readReport(true);
+  if (active && requestVersion === loadVersion && result.value) pageState.value = "ready";
   void trackEvent("goal_fit_report_detail_view", { metadata: { recovery: true } });
 }
 
@@ -242,10 +307,14 @@ function state(value: GoalFitVirtualPaymentState): void {
 
 onLoad((query) => {
   unsub = subscribeGoalFitVirtualPaymentState(state);
-  const requested = typeof query?.assessmentId === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(query.assessmentId) ? query.assessmentId : "";
-  const recovery = !requested && !readLatestCompletedSession() ? readGoalFitHistoryReportRecovery() : null;
-  if(requested||recovery) void loadHistory(requested || recovery!.assessmentId);
-  else void load(typeof query?.sessionId === "string" ? query.sessionId : "").then(resume);
+  const requestedAssessmentId = typeof query?.assessmentId === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(query.assessmentId) ? query.assessmentId : "";
+  const requestedSessionId = typeof query?.sessionId === "string" ? query.sessionId : "";
+  const historyRequested = query?.source === "my-reports";
+  const recovery = !requestedAssessmentId && !requestedSessionId ? readGoalFitHistoryReportRecovery() : null;
+  diagnostic("free_result_page_mounted", { source: historyRequested ? "history_route" : requestedSessionId ? "route_session" : "route_assessment", contextMatch: true });
+  if (historyRequested && requestedAssessmentId) void loadHistory(requestedAssessmentId);
+  else if (recovery) void loadHistory(recovery.assessmentId);
+  else void load(requestedSessionId, requestedAssessmentId).then(resume);
 });
 onShow(() => {
   if (historyMode.value) {
@@ -261,11 +330,17 @@ onUnload(() => {
   if (assessmentId.value) invalidateGoalFitVirtualPaymentFlow({ assessmentId: assessmentId.value });
 });
 function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
+function retryLoad(): void {
+  if (historyMode.value && assessmentId.value) void loadHistory(assessmentId.value);
+  else void load(session?.id ?? "", assessmentId.value);
+}
 </script>
 
 <template>
   <view class="page">
-    <view v-if="result || report" class="content">
+    <view v-if="pageState === 'loading'" class="empty-card card"><text class="conclusion-title">正在生成你的结果……</text><text class="section-copy">请稍候，正在确认本次测评结果与购买状态。</text></view>
+    <view v-else-if="pageState === 'error'" class="empty-card card"><text class="conclusion-title">结果暂时无法加载</text><text class="section-copy">{{ error }}</text><button class="retry-button" @click="retryLoad">重新加载</button></view>
+    <view v-else-if="pageState === 'ready'" class="content">
       <view v-if="conversion && result && proof" class="paid-view-switch card"><button :class="['paid-view-button', { active: activePaidView === 'overview' }]" @click="switchPaidView('overview')">结果概览</button><button :class="['paid-view-button', { active: activePaidView === 'full' }]" @click="switchPaidView('full')">完整报告</button></view>
 
       <view v-if="result && (!report || (conversion && activePaidView === 'overview'))" class="conclusion-card card">
@@ -375,9 +450,7 @@ function home(): void { uni.reLaunch({ url: "/pages/index/index" }); }
 
       <view class="page-actions"><text class="home-link" @click="home">返回首页</text></view>
     </view>
-    <view v-else class="empty-card card"><text class="conclusion-title">结果暂不可用</text><text class="section-copy">{{ error }}</text></view>
-
-    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" :disabled="payment.busy" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">正在准备你的专属报告</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
+    <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="!purchaseStateLoaded" class="cta-copy">正在确认购买状态</text><text v-else-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">报告生成中</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
   </view>
 </template>
 
