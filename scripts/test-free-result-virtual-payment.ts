@@ -98,8 +98,9 @@ assert(source.includes("showConversionArea") && source.includes("!report.value")
 assert(source.includes("overview-card strength-card") && source.includes("overview-card risk-overview-card"), "purchased report strength and risk must render in separate overview blocks");
 assert(source.includes("conversion.primaryStrength") && source.includes("conversion.primaryRisk"), "the report overview must keep the authoritative strength and risk fields");
 assert(source.includes("v-for=\"(item, index) in conversion.sections\"") && source.includes("class=\"report-section-card card\""), "each report section must render as its own chapter card");
-assert(source.includes("const expanded = ref(0)") && source.includes("watch([assessmentId, conversion]"), "the first chapter must open by default and reset when the report changes");
-assert(source.includes("function toggleSection(index: number)") && source.includes("class=\"section-toggle\""), "the complete chapter header must toggle expansion");
+assert(source.includes("const expandedSections = ref<Set<number>>(new Set([0]))") && source.includes("watch([assessmentId, conversion]"), "the first chapter must open by default and reset when the report changes");
+assert(source.includes("function toggleSection(index: number)") && source.includes("function isSectionExpanded(index: number)") && source.includes("class=\"section-toggle\""), "the complete chapter header must toggle independently");
+assert(source.includes("const next = new Set(expandedSections.value)") && source.includes("next.delete(index)") && source.includes("next.add(index)"), "opening one report section must not collapse other sections");
 assert(source.includes("查看详细分析 ↓") && source.includes("收起详细分析 ↑"), "chapter controls must have explicit open and close labels");
 assert(!source.includes("expanded === index ? '−' : '+'"), "chapter controls must not rely on plus-only affordances");
 assert((source.match(/item\.coreExplanation/g) ?? []).length === 2, "core explanation must appear only in the collapsed chapter summary guard and rendering");

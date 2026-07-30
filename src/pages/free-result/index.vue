@@ -23,7 +23,7 @@ const proofAssessmentId = ref("");
 const snapshotAssessmentId = ref("");
 const access = ref<GoalFitReportAccessState>("LOCKED");
 const payment = ref<GoalFitVirtualPaymentState>(getActiveGoalFitVirtualPaymentState());
-const expanded = ref(0);
+const expandedSections = ref<Set<number>>(new Set([0]));
 const activePaidView = ref<"overview" | "full">("full");
 const historyMode = ref(false);
 const historyEntitlementUncertain = ref(false);
@@ -118,7 +118,14 @@ function hasItems(value: unknown): value is string[] {
 }
 
 function toggleSection(index: number): void {
-  expanded.value = expanded.value === index ? -1 : index;
+  const next = new Set(expandedSections.value);
+  if (next.has(index)) next.delete(index);
+  else next.add(index);
+  expandedSections.value = next;
+}
+
+function isSectionExpanded(index: number): boolean {
+  return expandedSections.value.has(index);
 }
 
 function switchPaidView(view: "overview" | "full"): void {
@@ -127,7 +134,7 @@ function switchPaidView(view: "overview" | "full"): void {
 }
 
 watch([assessmentId, conversion], () => {
-  expanded.value = 0;
+  expandedSections.value = conversion.value?.sections.length ? new Set([0]) : new Set();
   activePaidView.value = "full";
 });
 watch(canPay, (value) => {
@@ -503,10 +510,10 @@ function retryLoad(): void {
         <view v-for="(item, index) in conversion.sections" :key="item.moduleId" class="report-section-card card">
           <view class="section-toggle" role="button" @click="toggleSection(index)">
             <text class="risk-index">0{{ index + 1 }}</text>
-            <view class="section-toggle-content"><text class="section-title">{{ item.title }}</text><text v-if="hasText(item.coreExplanation)" class="section-copy">{{ item.coreExplanation }}</text><text class="section-action">{{ expanded === index ? '收起详细分析 ↑' : '查看详细分析 ↓' }}</text></view>
+            <view class="section-toggle-content"><text class="section-title">{{ item.title }}</text><text v-if="hasText(item.coreExplanation)" class="section-copy">{{ item.coreExplanation }}</text><text class="section-action">{{ isSectionExpanded(index) ? '收起详细分析 ↑' : '查看详细分析 ↓' }}</text></view>
           </view>
 
-          <view v-if="expanded === index" class="section-detail">
+          <view v-if="isSectionExpanded(index)" class="section-detail">
             <view v-if="item.scenarios.length" class="detail-group"><text class="detail-group-title">典型工作场景</text><view v-for="(scenario, scenarioIndex) in item.scenarios" :key="`${scenario.situation}-${scenarioIndex}`" class="scenario-card"><text class="scenario-index">场景0{{ scenarioIndex + 1 }}</text><text class="scenario-label">情境</text><text class="detail-copy">{{ scenario.situation }}</text><text class="scenario-label">反应</text><text class="detail-copy">{{ scenario.reaction }}</text></view></view>
             <view v-if="hasText(item.normalNewcomerReaction)" class="detail-group"><text class="detail-group-title">新人可能出现的正常反应</text><text class="detail-copy">{{ item.normalNewcomerReaction }}</text></view>
             <view v-if="hasText(item.sustainedRisk)" class="detail-group"><text class="detail-group-title">这种情况持续后的风险</text><text class="detail-copy">{{ item.sustainedRisk }}</text></view>
