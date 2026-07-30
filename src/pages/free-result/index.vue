@@ -57,7 +57,24 @@ const isRefunded = computed(() => access.value === "REFUNDED");
 const canPurchaseThisHistoryReport = computed(() => historyMode.value && isRefunded.value);
 const showConversionArea = computed(() => pageState.value === "ready" && !report.value && hasFreeResult.value && (isRetryableLockedState.value || isRefunded.value) && (!historyMode.value || canPurchaseThisHistoryReport.value));
 const hasStablePaymentContext = computed(() => /^asm_[A-Za-z0-9_-]{8,}$/.test(assessmentId.value) && resultAssessmentId.value === assessmentId.value && proofAssessmentId.value === assessmentId.value && snapshotAssessmentId.value === assessmentId.value && !!proof.value && purchaseStateLoaded.value);
-const canPay = computed(() => showConversionArea.value && isWechatMiniapp.value && virtualPaymentSupported.value && hasStablePaymentContext.value && !payment.value.busy);
+type PaymentFlowBlockedReason = "PAGE_NOT_READY" | "CAN_PAY_FALSE" | "NOT_WECHAT_MINIPROGRAM" | "CAPABILITY_UNAVAILABLE" | "ASSESSMENT_ID_INVALID" | "RESULT_CONTEXT_MISMATCH" | "SNAPSHOT_MISSING" | "SNAPSHOT_CONTEXT_MISMATCH" | "PROOF_MISSING" | "PROOF_CONTEXT_MISMATCH" | "PURCHASES_NOT_LOADED" | "PURCHASE_NOT_ELIGIBLE" | "PAYMENT_ALREADY_IN_PROGRESS" | "HISTORY_MODE_BLOCKED" | "UNEXPECTED_HANDLER_ERROR";
+function paymentFlowBlockedReason(): PaymentFlowBlockedReason | null {
+  if (payment.value.busy) return "PAYMENT_ALREADY_IN_PROGRESS";
+  if (pageState.value !== "ready") return "PAGE_NOT_READY";
+  if (historyMode.value && !canPurchaseThisHistoryReport.value) return "HISTORY_MODE_BLOCKED";
+  if (!isWechatMiniapp.value) return "NOT_WECHAT_MINIPROGRAM";
+  if (!virtualPaymentSupported.value) return "CAPABILITY_UNAVAILABLE";
+  if (!/^asm_[A-Za-z0-9_-]{8,}$/.test(assessmentId.value)) return "ASSESSMENT_ID_INVALID";
+  if (!result.value || resultAssessmentId.value !== assessmentId.value) return "RESULT_CONTEXT_MISMATCH";
+  if (!session?.reportSnapshotId) return "SNAPSHOT_MISSING";
+  if (snapshotAssessmentId.value !== assessmentId.value) return "SNAPSHOT_CONTEXT_MISMATCH";
+  if (!proof.value) return "PROOF_MISSING";
+  if (proofAssessmentId.value !== assessmentId.value) return "PROOF_CONTEXT_MISMATCH";
+  if (!purchaseStateLoaded.value) return "PURCHASES_NOT_LOADED";
+  if (!showConversionArea.value) return "PURCHASE_NOT_ELIGIBLE";
+  return null;
+}
+const canPay = computed(() => paymentFlowBlockedReason() === null);
 const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
 const paymentFailureNotice = computed(() => payment.value.safeCode === "PAYMENT_INVOKE_TIMEOUT" ? "未能调起支付，请重试" : "");
 
@@ -66,6 +83,27 @@ function hasText(value: unknown): value is string {
 }
 
 function suffix(value: string | undefined): string | undefined { return value?.slice(-6); }
+function paymentFlowMetadata(reason?: PaymentFlowBlockedReason): Record<string, string | boolean | undefined> {
+  return {
+    reason,
+    pageState: pageState.value,
+    canPay: canPay.value,
+    isWechatMiniProgram: isWechatMiniapp.value,
+    virtualPaymentAvailable: virtualPaymentSupported.value,
+    assessmentIdValid: /^asm_[A-Za-z0-9_-]{8,}$/.test(assessmentId.value),
+    resultContextMatch: !!result.value && resultAssessmentId.value === assessmentId.value,
+    snapshotPresent: !!session?.reportSnapshotId,
+    snapshotContextMatch: snapshotAssessmentId.value === assessmentId.value,
+    proofPresent: !!proof.value,
+    proofContextMatch: proofAssessmentId.value === assessmentId.value,
+    purchasesLoaded: purchaseStateLoaded.value,
+    purchaseStatus: access.value,
+    paymentInProgress: payment.value.busy,
+    historyMode: historyMode.value,
+    assessmentIdSuffix: suffix(assessmentId.value),
+  };
+}
+function reportPaymentFlowBlocked(reason: PaymentFlowBlockedReason): void { void trackEvent("payment_flow_blocked", { metadata: paymentFlowMetadata(reason) }); }
 function diagnostic(event: "free_result_page_mounted" | "free_result_fetch_started" | "free_result_fetch_succeeded" | "free_result_fetch_failed" | "free_result_ready" | "payment_button_enabled" | "assessment_context_mismatch", metadata: { source?: string; httpStatus?: number; retryCount?: number; elapsedMs?: number; errorMessageCategory?: string; contextMatch?: boolean } = {}): void {
   void trackEvent(event, { metadata: { assessmentIdSuffix: suffix(assessmentId.value), sessionIdSuffix: suffix(session?.id), reportSnapshotIdSuffix: suffix(session?.reportSnapshotId), source: metadata.source, httpStatus: metadata.httpStatus, retryCount: metadata.retryCount, elapsedMs: metadata.elapsedMs, pageState: pageState.value, purchaseStateLoaded: purchaseStateLoaded.value, contextMatch: metadata.contextMatch, errorMessageCategory: metadata.errorMessageCategory } });
 }
@@ -265,21 +303,28 @@ async function loadHistory(id: string): Promise<void> {
 }
 
 async function unlock(): Promise<void> {
-  if (!canPay.value || payment.value.busy) return;
-  void trackEvent("goal_fit_report_unlock_click", { metadata: { reportType: proof.value?.reportType, mappingVersion: proof.value?.mappingVersion, riskModuleCount: proof.value?.selectedRiskModules.length } });
-  void trackEvent("payment_flow_entered", { metadata: { assessmentIdSuffix: suffix(assessmentId.value), reportSnapshotIdSuffix: suffix(session?.reportSnapshotId), pageState: pageState.value, purchaseStateLoaded: purchaseStateLoaded.value, contextMatch: hasStablePaymentContext.value } });
-  access.value = "PREPARING_PAYMENT";
-  const outcome = await startManagedGoalFitVirtualPayment({ assessmentId: assessmentId.value });
-  if (outcome.status === "paid") {
-    access.value = "ENTITLED_LOADING";
+  try {
+    void trackEvent("goal_fit_report_unlock_click", { metadata: { reportType: proof.value?.reportType, mappingVersion: proof.value?.mappingVersion, riskModuleCount: proof.value?.selectedRiskModules.length } });
+    const blocked = paymentFlowBlockedReason();
+    if (blocked) { reportPaymentFlowBlocked(blocked); return; }
+    void trackEvent("payment_flow_entered", { metadata: paymentFlowMetadata() });
+    access.value = "PREPARING_PAYMENT";
+    const outcome = await startManagedGoalFitVirtualPayment({ assessmentId: assessmentId.value });
+    if (outcome.status === "paid") {
+      access.value = "ENTITLED_LOADING";
+      save();
+      void trackEvent("goal_fit_payment_confirmed", { metadata: { reportType: proof.value?.reportType } });
+      if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
+      else await readReport();
+    } else if (outcome.status === "cancelled" || outcome.status === "closed") access.value = "PAYMENT_CANCELLED";
+    else if (outcome.status === "pending") access.value = "CONFIRMING_PAYMENT";
+    else access.value = "PAYMENT_FAILED";
     save();
-    void trackEvent("goal_fit_payment_confirmed", { metadata: { reportType: proof.value?.reportType } });
-    if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
-    else await readReport();
-  } else if (outcome.status === "cancelled" || outcome.status === "closed") access.value = "PAYMENT_CANCELLED";
-  else if (outcome.status === "pending") access.value = "CONFIRMING_PAYMENT";
-  else access.value = "PAYMENT_FAILED";
-  save();
+  } catch {
+    reportPaymentFlowBlocked("UNEXPECTED_HANDLER_ERROR");
+    access.value = "PAYMENT_FAILED";
+    save();
+  }
 }
 
 async function resume(): Promise<void> {
