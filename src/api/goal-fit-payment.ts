@@ -40,6 +40,10 @@ export type GoalFitPurchaseItemContractIssue = {
   invalidFieldNames: string[];
   invalidFieldTypeMap: Record<string, string>;
   totalItemCount: number;
+  validItemCount: number;
+  invalidItemCount: number;
+  invalidAssessmentIdSuffix: string | null;
+  invalidReportSnapshotIdSuffix: string | null;
 };
 export class GoalFitPurchasesContractError extends GoalFitPaymentContractError {
   constructor(readonly parserStage: "root" | "purchases_array" | "purchase_item", readonly responseRootKeys: string[], readonly purchasesType: "array" | "missing" | "other", readonly issue?: GoalFitPurchaseItemContractIssue) { super("INVALID_FULL_REPORT_RESPONSE"); this.name = "GoalFitPurchasesContractError"; }
@@ -74,7 +78,7 @@ function valueType(value: unknown): string {
 
 function inspectPurchaseListItem(value: unknown, index: number, totalItemCount: number): GoalFitPurchaseListItem | GoalFitPurchaseItemContractIssue {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { invalidItemIndex: index, invalidFieldNames: ["item"], invalidFieldTypeMap: { item: valueType(value) }, totalItemCount };
+    return { invalidItemIndex: index, invalidFieldNames: ["item"], invalidFieldTypeMap: { item: valueType(value) }, totalItemCount, validItemCount: 0, invalidItemCount: 0, invalidAssessmentIdSuffix: null, invalidReportSnapshotIdSuffix: null };
   }
   const item = value as Record<string, unknown>;
   const invalidFieldNames: string[] = [];
@@ -97,7 +101,7 @@ function inspectPurchaseListItem(value: unknown, index: number, totalItemCount: 
   require("revokedAt", item.revokedAt === null || isNonEmptyString(item.revokedAt));
   require("copyVersion", isOptionalString(item.copyVersion));
   require("mappingVersion", isOptionalString(item.mappingVersion));
-  if (invalidFieldNames.length) return { invalidItemIndex: index, invalidFieldNames: [...new Set(invalidFieldNames)], invalidFieldTypeMap, totalItemCount };
+  if (invalidFieldNames.length) return { invalidItemIndex: index, invalidFieldNames: [...new Set(invalidFieldNames)], invalidFieldTypeMap, totalItemCount, validItemCount: 0, invalidItemCount: 0, invalidAssessmentIdSuffix: typeof item.assessmentId === "string" ? item.assessmentId.slice(-6) : null, invalidReportSnapshotIdSuffix: typeof item.reportSnapshotId === "string" ? item.reportSnapshotId.slice(-6) : null };
   return item as GoalFitPurchaseListItem;
 }
 
@@ -253,7 +257,8 @@ export async function fetchGoalFitPurchases(): Promise<GoalFitPurchasesResponse>
   if (!Array.isArray(purchases)) throw new GoalFitPurchasesContractError("purchases_array", keys, purchases === undefined ? "missing" : "other");
   const parsed = purchases.map((item, index) => inspectPurchaseListItem(item, index, purchases.length));
   const valid = parsed.filter((item): item is GoalFitPurchaseListItem => "assessmentId" in item);
-  const issue = parsed.find((item): item is GoalFitPurchaseItemContractIssue => "invalidItemIndex" in item);
+  const invalid = parsed.filter((item): item is GoalFitPurchaseItemContractIssue => "invalidItemIndex" in item);
+  const issue = invalid[0] ? { ...invalid[0], validItemCount: valid.length, invalidItemCount: invalid.length } : undefined;
   if (!valid.length && issue) throw new GoalFitPurchasesContractError("purchase_item", keys, "array", issue);
   return issue ? { purchases: valid, partialContractError: issue } : { purchases: valid };
 }

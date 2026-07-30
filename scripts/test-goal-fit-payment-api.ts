@@ -95,7 +95,7 @@ void (async () => {
     response = { purchases: [validPurchase, { ...validPurchase, assessmentId: "assessment_local_only" }] };
     const partialPurchases = await payment.fetchGoalFitPurchases();
     assert(partialPurchases.purchases.length === 1 && partialPurchases.purchases[0]?.assessmentId === validPurchase.assessmentId, "one malformed historical item must not hide valid reports");
-    assert(partialPurchases.partialContractError?.invalidItemIndex === 1 && partialPurchases.partialContractError.invalidFieldNames.includes("assessmentId") && partialPurchases.partialContractError.invalidFieldTypeMap.assessmentId === "string", "partial diagnostics must include only item index, field names, and field types");
+    assert(partialPurchases.partialContractError?.invalidItemIndex === 1 && partialPurchases.partialContractError.invalidFieldNames.includes("assessmentId") && partialPurchases.partialContractError.invalidFieldTypeMap.assessmentId === "string" && partialPurchases.partialContractError.invalidAssessmentIdSuffix === "l_only" && partialPurchases.partialContractError.invalidReportSnapshotIdSuffix === "123456" && partialPurchases.partialContractError.validItemCount === 1 && partialPurchases.partialContractError.invalidItemCount === 1, "partial diagnostics must use only suffixes, field names, field types, and item counts");
     response = { purchases: [{ ...validPurchase, assessmentId: "assessment_local_only" }] };
     try { await payment.fetchGoalFitPurchases(); throw new Error("all malformed purchases must fail"); } catch (error) { assert(error instanceof payment.GoalFitPurchasesContractError && error.parserStage === "purchase_item" && error.issue?.totalItemCount === 1, "all malformed purchases must expose safe item diagnostics"); }
 
