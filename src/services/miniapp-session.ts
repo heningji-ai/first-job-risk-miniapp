@@ -1,18 +1,41 @@
 import { request } from "@/api/request";
 import { getPlatform } from "@/platform";
-import { readMiniappSession, saveMiniappSession } from "@/storage/miniapp-session";
+import { clearMiniappSession, readMiniappSession, readStoredMiniappSession, saveMiniappSession } from "@/storage/miniapp-session";
 import { getVisitorId } from "@/storage/visitor";
 
 type SessionResponse = { sessionToken: string; expiresAt: string; visitorId: string };
-let pending: Promise<void> | null = null;
+const SESSION_REFRESH_WINDOW_MS = 60_000;
+export type MiniappSessionAction = "reuse" | "proactive_refresh" | "forced_refresh";
+export type MiniappSessionRefreshReason = "missing" | "expired" | "near_expiry" | "provider_401";
+export class MiniappSessionRefreshError extends Error { constructor(readonly reason: MiniappSessionRefreshReason) { super("MINIAPP_SESSION_REFRESH_FAILED"); this.name = "MiniappSessionRefreshError"; } }
+let pending: Promise<MiniappSessionAction> | null = null;
 export type MiniappSessionDeps = { platform: ReturnType<typeof getPlatform>; read: () => { sessionToken: string; expiresAt: string } | null; save: (value: { sessionToken: string; expiresAt: string }) => void; login: (callbacks: { success: (value: { code?: string }) => void; fail: () => void }) => void; exchange: (code: string, visitorId: string) => Promise<SessionResponse>; visitorId: () => string };
-export function ensureWechatMiniappSessionWith(deps: MiniappSessionDeps): Promise<void> {
-  let active = false; try { const session = deps.read(); active = deps.platform === "wechat_miniapp" && (!session || new Date(session.expiresAt).getTime() <= Date.now() + 60_000); } catch { return Promise.resolve(); }
-  if (!active) return Promise.resolve();
-  return new Promise<void>((resolve) => deps.login({ success: async ({ code }) => { try { if (!code) return; const result = await deps.exchange(code, deps.visitorId()); deps.save({ sessionToken: result.sessionToken, expiresAt: result.expiresAt }); } catch { /* identity must not block free flow */ } finally { resolve(); } }, fail: resolve }));
+function refreshReason(session: { sessionToken: string; expiresAt: string } | null, force: boolean): MiniappSessionRefreshReason | null {
+  if (force) return "provider_401";
+  if (!session) return "missing";
+  const expiresAt = new Date(session.expiresAt).getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return "expired";
+  return expiresAt <= Date.now() + SESSION_REFRESH_WINDOW_MS ? "near_expiry" : null;
 }
-export function ensureWechatMiniappSession(): Promise<void> {
-  if (getPlatform() !== "wechat_miniapp" || readMiniappSession()) return Promise.resolve();
-  if (!pending) pending = ensureWechatMiniappSessionWith({ platform: getPlatform(), read: readMiniappSession, save: saveMiniappSession, login: (callbacks) => uni.login({ provider: "weixin", ...callbacks }), exchange: (code, visitorId) => request<SessionResponse, { code: string; visitorId: string }>({ path: "/api/miniapp/wechat/session", method: "POST", data: { code, visitorId } }), visitorId: getVisitorId }).finally(() => { pending = null; });
-  return pending as Promise<void>;
+export function ensureWechatMiniappSessionWith(deps: MiniappSessionDeps): Promise<MiniappSessionAction> {
+  if (deps.platform !== "wechat_miniapp") return Promise.resolve("reuse");
+  let session: { sessionToken: string; expiresAt: string } | null;
+  try { session = deps.read(); } catch { return Promise.reject(new MiniappSessionRefreshError("missing")); }
+  const reason = refreshReason(session, false);
+  if (!reason) return Promise.resolve("reuse");
+  return new Promise<MiniappSessionAction>((resolve, reject) => deps.login({ success: async ({ code }) => { try { if (!code) throw new MiniappSessionRefreshError(reason); const result = await deps.exchange(code, deps.visitorId()); if (!result?.sessionToken || !result.expiresAt) throw new MiniappSessionRefreshError(reason); deps.save({ sessionToken: result.sessionToken, expiresAt: result.expiresAt }); resolve("proactive_refresh"); } catch { reject(new MiniappSessionRefreshError(reason)); } }, fail: () => reject(new MiniappSessionRefreshError(reason)) }));
 }
+function refresh(force: boolean): Promise<MiniappSessionAction> {
+  if (getPlatform() !== "wechat_miniapp") return Promise.resolve("reuse");
+  const reason = refreshReason(readStoredMiniappSession(), force);
+  if (!reason) return Promise.resolve("reuse");
+  if (!pending) {
+    clearMiniappSession();
+    pending = ensureWechatMiniappSessionWith({ platform: getPlatform(), read: () => null, save: saveMiniappSession, login: (callbacks) => uni.login({ provider: "weixin", ...callbacks }), exchange: (code, visitorId) => request<SessionResponse, { code: string; visitorId: string }>({ path: "/api/miniapp/wechat/session", method: "POST", data: { code, visitorId } }), visitorId: getVisitorId })
+      .then(() => force ? "forced_refresh" : "proactive_refresh")
+      .finally(() => { pending = null; });
+  }
+  return pending;
+}
+export function ensureWechatMiniappSession(): Promise<void> { return refresh(false).then(() => undefined); }
+export function forceRefreshWechatMiniappSession(): Promise<void> { return refresh(true).then(() => undefined); }
