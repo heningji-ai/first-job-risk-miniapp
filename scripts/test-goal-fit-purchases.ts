@@ -15,7 +15,12 @@ for (const token of [
   "GoalFitPurchaseListResponse",
   "isOfficialAssessmentId",
   "/^asm_[A-Za-z0-9_-]{8,}$/",
-  "purchases.every(isPurchaseListItem)",
+  "inspectPurchaseListItem",
+  "partialContractError",
+  "invalidItemIndex",
+  "invalidFieldNames",
+  "invalidFieldTypeMap",
+  "totalItemCount",
   "GoalFitPurchasesContractError",
   "purchases_array",
   "purchase_item",
@@ -24,4 +29,5 @@ for (const token of [
   "revokedAt",
 ]) assert(api.includes(token) || types.includes(token), `missing purchases contract: ${token}`);
 assert(!api.includes("assessment_"), "local assessment IDs must not be accepted by purchases parsing");
+assert(api.includes("if (!valid.length && issue)") && api.includes("purchases: valid"), "an invalid historical item must not block valid purchased reports");
 console.log("Goal Fit purchases API contract tests passed.");

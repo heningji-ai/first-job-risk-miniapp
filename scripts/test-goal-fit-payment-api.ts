@@ -91,6 +91,14 @@ void (async () => {
     const refunded = await payment.fetchLatestGoalFitPurchase();
     assert(refunded.purchase?.status === "REFUNDED" && refunded.purchase.unlocked === false, "latest purchase must preserve the refunded entitlement contract without report content");
 
+    const validPurchase = { assessmentId: "asm_purchase_123456", reportSnapshotId: "rpt_purchase_123456", reportType: "goal_fit", reportTypeTitle: "报告", companyType: "互联网", roleName: "产品", completedAt: "2026-07-30T00:00:00.000Z", primaryConclusion: null, status: "ACTIVE", unlocked: true, revokedAt: null, copyVersion: null, mappingVersion: null };
+    response = { purchases: [validPurchase, { ...validPurchase, assessmentId: "assessment_local_only" }] };
+    const partialPurchases = await payment.fetchGoalFitPurchases();
+    assert(partialPurchases.purchases.length === 1 && partialPurchases.purchases[0]?.assessmentId === validPurchase.assessmentId, "one malformed historical item must not hide valid reports");
+    assert(partialPurchases.partialContractError?.invalidItemIndex === 1 && partialPurchases.partialContractError.invalidFieldNames.includes("assessmentId") && partialPurchases.partialContractError.invalidFieldTypeMap.assessmentId === "string", "partial diagnostics must include only item index, field names, and field types");
+    response = { purchases: [{ ...validPurchase, assessmentId: "assessment_local_only" }] };
+    try { await payment.fetchGoalFitPurchases(); throw new Error("all malformed purchases must fail"); } catch (error) { assert(error instanceof payment.GoalFitPurchasesContractError && error.parserStage === "purchase_item" && error.issue?.totalItemCount === 1, "all malformed purchases must expose safe item diagnostics"); }
+
     response = new ApiError("FULL_REPORT_REFUNDED", { statusCode: 403 });
     await rejects(() => payment.fetchGoalFitFullReport("asm_refunded_123456"), "FULL_REPORT_REFUNDED");
 

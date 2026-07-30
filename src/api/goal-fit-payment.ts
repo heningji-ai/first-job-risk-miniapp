@@ -35,9 +35,17 @@ export class GoalFitPaymentContractError extends ApiError {
     this.name = "GoalFitPaymentContractError";
   }
 }
+export type GoalFitPurchaseItemContractIssue = {
+  invalidItemIndex: number;
+  invalidFieldNames: string[];
+  invalidFieldTypeMap: Record<string, string>;
+  totalItemCount: number;
+};
 export class GoalFitPurchasesContractError extends GoalFitPaymentContractError {
-  constructor(readonly parserStage: "root" | "purchases_array" | "purchase_item", readonly responseRootKeys: string[], readonly purchasesType: "array" | "missing" | "other") { super("INVALID_FULL_REPORT_RESPONSE"); this.name = "GoalFitPurchasesContractError"; }
+  constructor(readonly parserStage: "root" | "purchases_array" | "purchase_item", readonly responseRootKeys: string[], readonly purchasesType: "array" | "missing" | "other", readonly issue?: GoalFitPurchaseItemContractIssue) { super("INVALID_FULL_REPORT_RESPONSE"); this.name = "GoalFitPurchasesContractError"; }
 }
+
+export type GoalFitPurchasesResponse = GoalFitPurchaseListResponse & { partialContractError?: GoalFitPurchaseItemContractIssue };
 
 let paymentRequestClient: PaymentRequestClient = request;
 
@@ -58,24 +66,39 @@ function isOptionalString(value: unknown): value is string | null {
   return value === null || isNonEmptyString(value);
 }
 
-function isPurchaseListItem(value: unknown): value is GoalFitPurchaseListItem {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function valueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function inspectPurchaseListItem(value: unknown, index: number, totalItemCount: number): GoalFitPurchaseListItem | GoalFitPurchaseItemContractIssue {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { invalidItemIndex: index, invalidFieldNames: ["item"], invalidFieldTypeMap: { item: valueType(value) }, totalItemCount };
+  }
   const item = value as Record<string, unknown>;
-  return isOfficialAssessmentId(item.assessmentId)
-    && isNonEmptyString(item.reportSnapshotId)
-    && isNonEmptyString(item.reportType)
-    && isOptionalString(item.reportTypeTitle)
-    && isNonEmptyString(item.companyType)
-    && isNonEmptyString(item.roleName)
-    && isNonEmptyString(item.completedAt)
-    && !Number.isNaN(Date.parse(item.completedAt))
-    && isOptionalString(item.primaryConclusion)
-    && ["ACTIVE", "REFUNDED", "REVOKED"].includes(String(item.status))
-    && typeof item.unlocked === "boolean"
-    && ((item.status === "ACTIVE" && item.unlocked === true) || (item.status !== "ACTIVE" && item.unlocked === false))
-    && (item.revokedAt === null || isNonEmptyString(item.revokedAt))
-    && isOptionalString(item.copyVersion)
-    && isOptionalString(item.mappingVersion);
+  const invalidFieldNames: string[] = [];
+  const invalidFieldTypeMap: Record<string, string> = {};
+  const require = (field: string, valid: boolean): void => { if (!valid) { invalidFieldNames.push(field); invalidFieldTypeMap[field] = valueType(item[field]); } };
+  require("assessmentId", isOfficialAssessmentId(item.assessmentId));
+  require("reportSnapshotId", isNonEmptyString(item.reportSnapshotId));
+  require("reportType", isNonEmptyString(item.reportType));
+  require("reportTypeTitle", isOptionalString(item.reportTypeTitle));
+  require("companyType", isNonEmptyString(item.companyType));
+  require("roleName", isNonEmptyString(item.roleName));
+  require("completedAt", isNonEmptyString(item.completedAt) && !Number.isNaN(Date.parse(item.completedAt)));
+  require("primaryConclusion", isOptionalString(item.primaryConclusion));
+  require("status", ["ACTIVE", "REFUNDED", "REVOKED"].includes(String(item.status)));
+  require("unlocked", typeof item.unlocked === "boolean");
+  if (typeof item.unlocked === "boolean" && ["ACTIVE", "REFUNDED", "REVOKED"].includes(String(item.status)) && ((item.status === "ACTIVE") !== item.unlocked)) {
+    require("status", false);
+    require("unlocked", false);
+  }
+  require("revokedAt", item.revokedAt === null || isNonEmptyString(item.revokedAt));
+  require("copyVersion", isOptionalString(item.copyVersion));
+  require("mappingVersion", isOptionalString(item.mappingVersion));
+  if (invalidFieldNames.length) return { invalidItemIndex: index, invalidFieldNames: [...new Set(invalidFieldNames)], invalidFieldTypeMap, totalItemCount };
+  return item as GoalFitPurchaseListItem;
 }
 
 function encodeRequiredId(value: string, code: PaymentContractErrorCode): string {
@@ -219,7 +242,7 @@ export async function fetchLatestGoalFitPurchase(): Promise<LatestGoalFitPurchas
 }
 
 /** Lists only reports that the server has already marked as unlocked for this identity. */
-export async function fetchGoalFitPurchases(): Promise<GoalFitPurchaseListResponse> {
+export async function fetchGoalFitPurchases(): Promise<GoalFitPurchasesResponse> {
   const response = await paymentRequestClient<unknown>({
     path: "/api/miniapp/goal-fit/purchases",
     requiresMiniappAuth: true,
@@ -228,6 +251,9 @@ export async function fetchGoalFitPurchases(): Promise<GoalFitPurchaseListRespon
   const purchases = (response as Record<string, unknown>).purchases;
   const keys = Object.keys(response as Record<string, unknown>).slice(0, 20);
   if (!Array.isArray(purchases)) throw new GoalFitPurchasesContractError("purchases_array", keys, purchases === undefined ? "missing" : "other");
-  if (!purchases.every(isPurchaseListItem)) throw new GoalFitPurchasesContractError("purchase_item", keys, "array");
-  return { purchases };
+  const parsed = purchases.map((item, index) => inspectPurchaseListItem(item, index, purchases.length));
+  const valid = parsed.filter((item): item is GoalFitPurchaseListItem => "assessmentId" in item);
+  const issue = parsed.find((item): item is GoalFitPurchaseItemContractIssue => "invalidItemIndex" in item);
+  if (!valid.length && issue) throw new GoalFitPurchasesContractError("purchase_item", keys, "array", issue);
+  return issue ? { purchases: valid, partialContractError: issue } : { purchases: valid };
 }
