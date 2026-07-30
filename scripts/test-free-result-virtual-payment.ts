@@ -54,6 +54,8 @@ assert(source.includes("requestVersion !== loadVersion") && source.includes("fre
 assert(source.includes("正在生成你的结果……") && source.includes("pageState === 'loading'") && source.includes("结果暂时无法加载"), "initial loading must not render the terminal error state");
 assert(source.includes("正在确认购买状态") && source.includes("报告生成中"), "incomplete payment prerequisites must be visibly non-payable");
 assert(source.includes("payment_button_enabled") && source.includes("free_result_ready") && source.includes("free_result_page_mounted"), "free result lifecycle diagnostics must be emitted with the result context");
+assert(source.includes("setWechatVirtualPaymentDiagnosticReporter((event, options) => trackEvent(event, options))"), "the production-proven page analytics client must inject the payment diagnostic reporter");
+assert(source.includes("payment_flow_entered") && source.indexOf("payment_flow_entered") > source.indexOf("goal_fit_report_unlock_click"), "payment flow entry must be recorded after the click and before flow startup");
 assert(source.includes("assessmentIdSuffix") && source.includes("sessionIdSuffix") && source.includes("reportSnapshotIdSuffix") && source.includes("errorMessageCategory"), "result diagnostics must use only safe identity suffixes and classified errors");
 assert(!source.includes("assessment_context_mismatch", source.indexOf("function diagnostic")) || source.includes("contextMatch"), "context mismatch diagnostics must remain classified and must not serialize raw records");
 assert(source.includes("outcome === null && !historyMode.value && !report.value") && source.includes("access.value = \"LOCKED\""), "a no-pending resume must restore a transient payment state to locked");

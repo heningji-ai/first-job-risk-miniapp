@@ -7,8 +7,8 @@ import type { AnalyticsContext, AnalyticsEvent, VisitPayload } from "@/types/ana
 
 let visitPromise: Promise<void> | null = null;
 
-function warnInDevelopment(message: string, error: unknown): void {
-  if (import.meta.env.DEV) console.warn(message, error);
+function warnInDevelopment(message: string, _error: unknown): void {
+  if (import.meta.env.DEV) console.warn(message, { category: "ANALYTICS_UPLOAD_FAILED" });
 }
 
 function currentPagePath(): string {
@@ -69,5 +69,6 @@ export async function trackEvent(
     });
   } catch (error) {
     warnInDevelopment(`[analytics] ${eventName || "event"} 上报失败`, error);
+    try { console.warn("[analytics] event upload failed", { eventName, category: "ANALYTICS_UPLOAD_FAILED" }); } catch { /* analytics must never affect the caller */ }
   }
 }

@@ -3,7 +3,7 @@ import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import { computed, ref, watch } from "vue";
 import { fetchGoalFitFreeResult, fetchGoalFitFullReport, fetchLatestGoalFitPurchase, GoalFitReportAccessError, type GoalFitFullReportResponse } from "@/api/goal-fit-payment";
 import { getPlatform } from "@/platform";
-import { isWechatVirtualPaymentSupported } from "@/services/wechat-virtual-payment";
+import { isWechatVirtualPaymentSupported, setWechatVirtualPaymentDiagnosticReporter } from "@/services/wechat-virtual-payment";
 import { getDisplayFreeResult, readCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
 import { retryPendingAssessmentSync } from "@/services/assessment-sync";
 import { getActiveGoalFitVirtualPaymentState, invalidateGoalFitVirtualPaymentFlow, resumeManagedGoalFitVirtualPaymentConfirmation, startManagedGoalFitVirtualPayment, subscribeGoalFitVirtualPaymentState, type GoalFitVirtualPaymentState } from "@/services/goal-fit-virtual-payment-controller";
@@ -267,6 +267,7 @@ async function loadHistory(id: string): Promise<void> {
 async function unlock(): Promise<void> {
   if (!canPay.value || payment.value.busy) return;
   void trackEvent("goal_fit_report_unlock_click", { metadata: { reportType: proof.value?.reportType, mappingVersion: proof.value?.mappingVersion, riskModuleCount: proof.value?.selectedRiskModules.length } });
+  void trackEvent("payment_flow_entered", { metadata: { assessmentIdSuffix: suffix(assessmentId.value), reportSnapshotIdSuffix: suffix(session?.reportSnapshotId), pageState: pageState.value, purchaseStateLoaded: purchaseStateLoaded.value, contextMatch: hasStablePaymentContext.value } });
   access.value = "PREPARING_PAYMENT";
   const outcome = await startManagedGoalFitVirtualPayment({ assessmentId: assessmentId.value });
   if (outcome.status === "paid") {
@@ -306,6 +307,7 @@ function state(value: GoalFitVirtualPaymentState): void {
 }
 
 onLoad((query) => {
+  setWechatVirtualPaymentDiagnosticReporter((event, options) => trackEvent(event, options));
   unsub = subscribeGoalFitVirtualPaymentState(state);
   const requestedAssessmentId = typeof query?.assessmentId === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(query.assessmentId) ? query.assessmentId : "";
   const requestedSessionId = typeof query?.sessionId === "string" ? query.sessionId : "";
@@ -326,6 +328,7 @@ onShow(() => {
 });
 onUnload(() => {
   active = false;
+  setWechatVirtualPaymentDiagnosticReporter();
   unsub?.();
   if (assessmentId.value) invalidateGoalFitVirtualPaymentFlow({ assessmentId: assessmentId.value });
 });

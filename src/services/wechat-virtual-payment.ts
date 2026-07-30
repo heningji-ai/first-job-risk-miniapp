@@ -74,10 +74,11 @@ function getWx(): WxApi | null {
 type PaymentDiagnosticTracker = (eventName: string, options: { metadata?: Record<string, unknown> }) => Promise<void> | void;
 let paymentDiagnosticTracker: PaymentDiagnosticTracker | null = null;
 
-/** Test-only seam; production analytics always uses the shared event client. */
-export function setWechatVirtualPaymentDiagnosticTrackerForTest(tracker?: PaymentDiagnosticTracker): void {
+export function setWechatVirtualPaymentDiagnosticReporter(tracker?: PaymentDiagnosticTracker): void {
   paymentDiagnosticTracker = tracker ?? null;
 }
+/** Test-only alias for the same production reporter seam. */
+export function setWechatVirtualPaymentDiagnosticTrackerForTest(tracker?: PaymentDiagnosticTracker): void { setWechatVirtualPaymentDiagnosticReporter(tracker); }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -141,11 +142,13 @@ function reportVirtualPaymentDiagnostic(event: string, context: WechatVirtualPay
   try { console.info("[goal-fit-payment]", event, details); } catch { /* console availability cannot affect payment */ }
   try {
     if (paymentDiagnosticTracker) {
-      void Promise.resolve(paymentDiagnosticTracker(event, { metadata: details })).catch(() => undefined);
-    } else {
-      void import("@/analytics").then(({ trackEvent }) => trackEvent(event, { metadata: details })).catch(() => undefined);
-    }
-  } catch { /* analytics cannot affect payment */ }
+      void Promise.resolve(paymentDiagnosticTracker(event, { metadata: details })).catch(() => {
+        try { console.warn("[goal-fit-payment] analytics upload failed", { event, category: "ANALYTICS_UPLOAD_FAILED" }); } catch { /* diagnostics cannot affect payment */ }
+      });
+    } else try { console.warn("[goal-fit-payment] analytics reporter unavailable", { event, category: "ANALYTICS_REPORTER_UNAVAILABLE" }); } catch { /* diagnostics cannot affect payment */ }
+  } catch {
+    try { console.warn("[goal-fit-payment] analytics upload failed", { event, category: "ANALYTICS_UPLOAD_FAILED" }); } catch { /* diagnostics cannot affect payment */ }
+  }
 }
 
 export function reportGoalFitVirtualPaymentDiagnostic(event: "payment_prepare_started" | "payment_prepare_succeeded", context: WechatVirtualPaymentDiagnosticContext): void {
