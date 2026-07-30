@@ -161,10 +161,15 @@ function setRefunded(requestedId: string): void {
   save();
 }
 
+function updateNavigationTitle(): void {
+  uni.setNavigationBarTitle({ title: historyMode.value || access.value === "UNLOCKED_V2" || access.value === "UNLOCKED_LEGACY" ? "报告详情" : "免费结果" });
+}
+
 function setUnlocked(value: GoalFitFullReportResponse): void {
   if (!active || value.assessmentId !== assessmentId.value) return;
   report.value = value;
   access.value = hasReportConversion(value.fullReport) ? "UNLOCKED_V2" : "UNLOCKED_LEGACY";
+  updateNavigationTitle();
   historyEntitlementUncertain.value = false;
   if (historyMode.value) clearGoalFitHistoryReportRecovery(value.assessmentId);
   save();
@@ -357,6 +362,8 @@ onLoad((query) => {
   const requestedAssessmentId = typeof query?.assessmentId === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(query.assessmentId) ? query.assessmentId : "";
   const requestedSessionId = typeof query?.sessionId === "string" ? query.sessionId : "";
   const historyRequested = query?.source === "my-reports";
+  historyMode.value = historyRequested;
+  updateNavigationTitle();
   const recovery = !requestedAssessmentId && !requestedSessionId ? readGoalFitHistoryReportRecovery() : null;
   diagnostic("free_result_page_mounted", { source: historyRequested ? "history_route" : requestedSessionId ? "route_session" : "route_assessment", contextMatch: true });
   if (historyRequested && requestedAssessmentId) void loadHistory(requestedAssessmentId);
