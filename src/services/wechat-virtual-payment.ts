@@ -73,6 +73,7 @@ function getWx(): WxApi | null {
 
 type PaymentDiagnosticTracker = (eventName: string, options: { metadata?: Record<string, unknown> }) => Promise<void> | void;
 let paymentDiagnosticTracker: PaymentDiagnosticTracker | null = null;
+type SafeDiagnosticValue = string | number | boolean | undefined;
 
 export function setWechatVirtualPaymentDiagnosticReporter(tracker?: PaymentDiagnosticTracker): void {
   paymentDiagnosticTracker = tracker ?? null;
@@ -82,6 +83,25 @@ export function setWechatVirtualPaymentDiagnosticTrackerForTest(tracker?: Paymen
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+const PROVIDER_ERROR_KEYWORDS = ["offerId", "buyQuantity", "env", "currencyType", "productId", "goodsPrice", "outTradeNo", "attach", "permission", "merchant"] as const;
+export function providerErrorDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (!normalized) return undefined;
+  const redacted = normalized
+    .replace(/https?:\/\/\S*\?\S*/gi, "[redacted-url-query]")
+    .replace(/[?&][A-Za-z0-9_.-]+=[^\s&]+/g, "[redacted-query]")
+    .replace(/\b[A-Za-z0-9]{32,}\b/g, "[redacted]")
+    .replace(/\b\d{10,}\b/g, "[redacted]")
+    .replace(/\b(?:signData|paySig|signature|openid|session(?:_?key)?)\s*[:=]\s*[^\s,;]+/gi, "[redacted]");
+  const details: string[] = [];
+  if (/missing\s+parameter/i.test(redacted)) details.push("missing parameter");
+  for (const keyword of PROVIDER_ERROR_KEYWORDS) {
+    if (new RegExp(`\\b${keyword}\\b`, "i").test(redacted)) details.push(keyword);
+  }
+  return details.length ? details.join(", ").slice(0, 200) : undefined;
 }
 
 function parseVersion(value: unknown): number[] | null {
@@ -129,7 +149,26 @@ export function classifyWechatVirtualPaymentFailure(error: unknown): WechatVirtu
   return new WechatVirtualPaymentError(kind, providerCode);
 }
 
-function reportVirtualPaymentDiagnostic(event: string, context: WechatVirtualPaymentDiagnosticContext = {}, extra: Record<string, string | number | boolean | undefined> = {}): void {
+function safeCallbackNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function safeCallbackString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 64 ? value : undefined;
+}
+
+function callbackMetadata(phase: "success" | "fail" | "complete" | "sync_throw" | "timeout", value?: unknown): Record<string, SafeDiagnosticValue> {
+  const callback = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    callbackPhase: phase,
+    callbackAt: Date.now(),
+    errCode: safeCallbackNumber(callback.errCode),
+    errno: safeCallbackNumber(callback.errno) ?? safeCallbackString(callback.errno),
+    providerErrorDetail: providerErrorDetail(callback.errMsg),
+  };
+}
+
+function reportVirtualPaymentDiagnostic(event: string, context: WechatVirtualPaymentDiagnosticContext = {}, extra: Record<string, SafeDiagnosticValue> = {}): void {
   const details: Record<string, string | number | boolean> = { platform: getPlatform() };
   try {
     const info = getWx()?.getSystemInfoSync?.();
@@ -171,7 +210,7 @@ export function requestWechatLoginCode(): Promise<string> {
         },
         fail,
       });
-    } catch {
+    } catch (error) {
       fail();
     }
   });
@@ -208,14 +247,17 @@ export function invokeWechatVirtualPayment(
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      reportVirtualPaymentDiagnostic("virtual_payment_timeout", diagnosticContext, { errorMessageCategory: "callback_timeout" });
+      reportVirtualPaymentDiagnostic("virtual_payment_timeout", diagnosticContext, {
+        ...callbackMetadata("timeout"),
+        errorMessageCategory: "callback_timeout",
+      });
       reject(new WechatVirtualPaymentError("timeout"));
     }, timeoutMs);
-    const succeed = () => {
+    const succeed = (response: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      reportVirtualPaymentDiagnostic("virtual_payment_success", diagnosticContext);
+      reportVirtualPaymentDiagnostic("virtual_payment_success", diagnosticContext, callbackMetadata("success", response));
       resolve({ status: "invoked" });
     };
     const fail = (error: unknown) => {
@@ -223,7 +265,11 @@ export function invokeWechatVirtualPayment(
       settled = true;
       clearTimeout(timeout);
       const providerCode = typeof (error as { errCode?: unknown })?.errCode === "number" ? (error as { errCode: number }).errCode : undefined;
-      reportVirtualPaymentDiagnostic("virtual_payment_fail", diagnosticContext, { errorCode: providerCode, errorMessageCategory: "provider_callback" });
+      reportVirtualPaymentDiagnostic("virtual_payment_fail", diagnosticContext, {
+        ...callbackMetadata("fail", error),
+        errorCode: providerCode,
+        errorMessageCategory: "provider_callback",
+      });
       reject(classifyWechatVirtualPaymentFailure(error));
     };
     try {
@@ -235,13 +281,16 @@ export function invokeWechatVirtualPayment(
         signature: params.signature,
         success: succeed,
         fail,
-        complete: () => { reportVirtualPaymentDiagnostic("virtual_payment_complete", diagnosticContext); },
+        complete: (response) => { reportVirtualPaymentDiagnostic("virtual_payment_complete", diagnosticContext, callbackMetadata("complete", response)); },
       });
-    } catch {
+    } catch (error) {
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
-        reportVirtualPaymentDiagnostic("virtual_payment_sync_throw", diagnosticContext, { errorMessageCategory: "synchronous_exception" });
+        reportVirtualPaymentDiagnostic("virtual_payment_sync_throw", diagnosticContext, {
+          ...callbackMetadata("sync_throw", error),
+          errorMessageCategory: "synchronous_exception",
+        });
         reject(new WechatVirtualPaymentError("failed"));
       }
     }
