@@ -128,6 +128,23 @@ function isSectionExpanded(index: number): boolean {
   return expandedSections.value.has(index);
 }
 
+const reportSectionTitles = [
+  "工作要求不清时，典型场景会是什么？",
+  "哪些情况最容易让你感受到工作压力？",
+  "哪些工作场景可能让你被挑战，甚至被否定？",
+];
+
+function reportSectionTitle(index: number, fallback: string): string {
+  return reportSectionTitles[index] ?? fallback;
+}
+
+function displayFirstSevenDaysEntry(entry: string): string {
+  const normalized = entry.replace(/\s/g, "");
+  return normalized.includes(["拆解一份真实", "JD或者工作任务"].join(""))
+    ? "主动向HR索要公司介绍、岗位资料或入职材料，也可以请HR帮你向用人部门确认，是否有业务资料可以提前学习和准备。"
+    : entry;
+}
+
 function switchPaidView(view: "overview" | "full"): void {
   activePaidView.value = view;
   uni.pageScrollTo({ scrollTop: 0, duration: 0 });
@@ -510,7 +527,7 @@ function retryLoad(): void {
         <view v-for="(item, index) in conversion.sections" :key="item.moduleId" class="report-section-card card">
           <view class="section-toggle" role="button" @click="toggleSection(index)">
             <text class="risk-index">0{{ index + 1 }}</text>
-            <view class="section-toggle-content"><text class="section-title">{{ item.title }}</text><text v-if="hasText(item.coreExplanation)" class="section-copy">{{ item.coreExplanation }}</text><text class="section-action">{{ isSectionExpanded(index) ? '收起详细分析 ↑' : '查看详细分析 ↓' }}</text></view>
+            <view class="section-toggle-content"><text class="section-title">{{ reportSectionTitle(index, item.title) }}</text><text v-if="hasText(item.coreExplanation)" class="section-copy">{{ item.coreExplanation }}</text><text class="section-action">{{ isSectionExpanded(index) ? '收起详细分析 ↑' : '查看详细分析 ↓' }}</text></view>
           </view>
 
           <view v-if="isSectionExpanded(index)" class="section-detail">
@@ -518,9 +535,9 @@ function retryLoad(): void {
             <view v-if="hasText(item.normalNewcomerReaction)" class="detail-group"><text class="detail-group-title">新人可能出现的正常反应</text><text class="detail-copy">{{ item.normalNewcomerReaction }}</text></view>
             <view v-if="hasText(item.sustainedRisk)" class="detail-group"><text class="detail-group-title">这种情况持续后的风险</text><text class="detail-copy">{{ item.sustainedRisk }}</text></view>
             <view v-if="hasItems(item.trainableParts)" class="detail-group"><text class="detail-group-title">可以训练的部分</text><view v-for="(entry, entryIndex) in item.trainableParts" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
-            <view v-if="hasItems(item.firstSevenDays)" class="detail-group"><text class="detail-group-title">入职前7天准备</text><view v-for="(entry, entryIndex) in item.firstSevenDays" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
-            <view v-if="hasItems(item.firstMonthReminder)" class="detail-group"><text class="detail-group-title">第一个月行动提醒</text><view v-for="(entry, entryIndex) in item.firstMonthReminder" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
-            <view v-if="hasItems(item.interviewQuestions)" class="detail-group"><text class="detail-group-title">面试确认问题</text><view v-for="(entry, entryIndex) in item.interviewQuestions" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
+            <view v-if="hasItems(item.firstSevenDays)" class="detail-group"><text class="detail-group-title">入职前7天准备</text><view v-for="(entry, entryIndex) in item.firstSevenDays" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ displayFirstSevenDaysEntry(entry) }}</text></view></view>
+            <view v-if="hasItems(item.firstMonthReminder)" class="detail-group"><text class="detail-group-title">如果你入职后面对这样的压力，第一个月应该注意什么？</text><view v-for="(entry, entryIndex) in item.firstMonthReminder" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
+            <view v-if="hasItems(item.interviewQuestions)" class="detail-group"><text class="detail-group-title">面试确认问题</text><text class="section-copy">如果你不希望入职后面对这样的压力，面试时需要确认：</text><view v-for="(entry, entryIndex) in item.interviewQuestions" :key="`${entry}-${entryIndex}`" class="detail-list-item"><text class="detail-list-index">{{ entryIndex + 1 }}</text><text class="detail-copy">{{ entry }}</text></view></view>
           </view>
         </view>
       </view>

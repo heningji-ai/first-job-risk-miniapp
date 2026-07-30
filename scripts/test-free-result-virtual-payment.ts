@@ -101,6 +101,11 @@ assert(source.includes("v-for=\"(item, index) in conversion.sections\"") && sour
 assert(source.includes("const expandedSections = ref<Set<number>>(new Set([0]))") && source.includes("watch([assessmentId, conversion]"), "the first chapter must open by default and reset when the report changes");
 assert(source.includes("function toggleSection(index: number)") && source.includes("function isSectionExpanded(index: number)") && source.includes("class=\"section-toggle\""), "the complete chapter header must toggle independently");
 assert(source.includes("const next = new Set(expandedSections.value)") && source.includes("next.delete(index)") && source.includes("next.add(index)"), "opening one report section must not collapse other sections");
+for (const title of ["工作要求不清时，典型场景会是什么？", "哪些情况最容易让你感受到工作压力？", "哪些工作场景可能让你被挑战，甚至被否定？"]) assert(source.includes(title), `missing clarified report section title: ${title}`);
+assert(source.includes("如果你不希望入职后面对这样的压力，面试时需要确认："), "interview questions must include the clarified guidance");
+assert(source.includes("如果你入职后面对这样的压力，第一个月应该注意什么？"), "first-month reminders must use the clarified title");
+assert(source.includes("displayFirstSevenDaysEntry(entry)") && source.includes("主动向HR索要公司介绍、岗位资料或入职材料"), "first-seven-days guidance must use the HR-supported preparation copy");
+assert(!source.includes("拆解一份真实JD或者工作任务"), "obsolete real-JD preparation copy must not render from the current template");
 assert(source.includes("查看详细分析 ↓") && source.includes("收起详细分析 ↑"), "chapter controls must have explicit open and close labels");
 assert(!source.includes("expanded === index ? '−' : '+'"), "chapter controls must not rely on plus-only affordances");
 assert((source.match(/item\.coreExplanation/g) ?? []).length === 2, "core explanation must appear only in the collapsed chapter summary guard and rendering");
