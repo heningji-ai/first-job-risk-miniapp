@@ -21,13 +21,14 @@ import {
 
 export type GoalFitVirtualPaymentFlowStatus =
   | "idle" | "preparing" | "invoking" | "confirming" | "paid" | "pending"
-  | "cancelled" | "closed" | "review_required" | "failed" | "unsupported";
+  | "entitled_loading" | "entitled_pending" | "cancelled" | "closed" | "review_required" | "failed" | "unsupported";
 
 export type GoalFitVirtualPaymentFlowSafeCode =
   | "INVALID_ASSESSMENT_ID" | "UNSUPPORTED" | "LOGIN_FAILED" | "PREPARE_FAILED"
   | "INVALID_PAYMENT_PARAMS" | "CANCELLED" | "SESSION_KEY_EXPIRED" | "RATE_LIMITED"
   | "CONFIGURATION_ERROR" | "RISK_BLOCKED" | "PAYMENT_FAILED" | "CONFIRMATION_PENDING"
   | "CONFIRMATION_FAILED" | "CLOSED" | "REVIEW_REQUIRED" | "FULL_REPORT_UNAVAILABLE"
+  | "FULL_REPORT_TEMPORARILY_UNAVAILABLE"
   | "PAYMENT_FLOW_STALE" | "MINIAPP_AUTH_REQUIRED" | "MINIAPP_SESSION_EXPIRED" | "PAYMENT_INVOKE_TIMEOUT";
 
 export type GoalFitVirtualPaymentFlowResult<TReport = unknown> = {
@@ -39,6 +40,7 @@ export type GoalFitVirtualPaymentFlowResult<TReport = unknown> = {
 };
 
 export const GOAL_FIT_VIRTUAL_PAYMENT_CONFIRM_DELAYS_MS = [0, 1000, 2000, 4000, 8000] as const;
+export const GOAL_FIT_VIRTUAL_PAYMENT_REPORT_DELAYS_MS = [0, 1000, 2000, 4000, 8000] as const;
 
 export type GoalFitVirtualPaymentFlowDependencies<TReport> = {
   supportCheck: () => boolean;
@@ -146,16 +148,26 @@ export async function confirmAndLoadGoalFitVirtualPayment<TReport>(assessmentId:
     }
     if (confirmation.status === "closed") { dependencies.clearPending(); return result("closed", assessmentId, { safeCode: "CLOSED" }); }
     if (confirmation.status === "review_required") { dependencies.clearPending(); return result("review_required", assessmentId, { safeCode: "REVIEW_REQUIRED" }); }
+    return loadConfirmedGoalFitVirtualPaymentReport(assessmentId, dependencies);
+  }
+  return result("pending", assessmentId, { safeCode: "CONFIRMATION_PENDING" });
+}
+
+async function loadConfirmedGoalFitVirtualPaymentReport<TReport>(assessmentId: string, dependencies: GoalFitVirtualPaymentFlowDependencies<TReport>): Promise<GoalFitVirtualPaymentFlowResult<TReport>> {
+  dependencies.onStateChange("entitled_loading");
+  for (const delay of GOAL_FIT_VIRTUAL_PAYMENT_REPORT_DELAYS_MS) {
+    if (delay > 0) await dependencies.delayFn(delay);
+    if (!dependencies.isFlowActive()) return stale(assessmentId);
     try {
       const report = await dependencies.fetchFullReport(assessmentId);
       if (!dependencies.isFlowActive()) return stale(assessmentId);
       dependencies.clearPending();
       return result("paid", assessmentId, { report });
     } catch {
-      return result("failed", assessmentId, { safeCode: "FULL_REPORT_UNAVAILABLE" });
+      // Payment is confirmed. Keep the pending attempt for report-only recovery.
     }
   }
-  return result("pending", assessmentId, { safeCode: "CONFIRMATION_PENDING" });
+  return result("entitled_pending", assessmentId, { safeCode: "FULL_REPORT_TEMPORARILY_UNAVAILABLE" });
 }
 
 export async function startGoalFitVirtualPaymentFlow<TReport = unknown>(options: GoalFitVirtualPaymentFlowOptions<TReport>): Promise<GoalFitVirtualPaymentFlowResult<TReport>> {
@@ -175,10 +187,7 @@ export async function startGoalFitVirtualPaymentFlow<TReport = unknown>(options:
     reportGoalFitVirtualPaymentDiagnostic("payment_prepare_succeeded", paymentDiagnosticContext(assessmentId, requestId, prepared.paymentAttemptId));
   } catch (error) {
     if ((error as Error)?.message === "ALREADY_PURCHASED") {
-      try {
-        const report = await dependencies.fetchFullReport(assessmentId);
-        return result("paid", assessmentId, { report });
-      } catch { return result("failed", assessmentId, { safeCode: "FULL_REPORT_UNAVAILABLE" }); }
+      return loadConfirmedGoalFitVirtualPaymentReport(assessmentId, dependencies);
     }
     return result("failed", assessmentId, { safeCode: "PREPARE_FAILED" });
   }

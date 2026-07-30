@@ -323,6 +323,10 @@ async function unlock(): Promise<void> {
       else await readReport();
     } else if (outcome.status === "cancelled" || outcome.status === "closed") access.value = "PAYMENT_CANCELLED";
     else if (outcome.status === "pending") access.value = "CONFIRMING_PAYMENT";
+    else if (outcome.status === "entitled_pending") {
+      access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
+      historyEntitlementUncertain.value = false;
+    }
     else access.value = "PAYMENT_FAILED";
     save();
   } catch {
@@ -344,7 +348,12 @@ async function resume(): Promise<void> {
     access.value = "ENTITLED_LOADING";
     save();
     if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
-    else await readReport(true);
+      else await readReport(true);
+  }
+  if (outcome?.status === "entitled_pending") {
+    access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
+    historyEntitlementUncertain.value = false;
+    save();
   }
 }
 
@@ -354,6 +363,8 @@ function state(value: GoalFitVirtualPaymentState): void {
   if (value.status === "preparing") access.value = "PREPARING_PAYMENT";
   if (value.status === "invoking") access.value = "INVOKING_PAYMENT";
   if (value.status === "confirming") access.value = "CONFIRMING_PAYMENT";
+  if (value.status === "entitled_loading") access.value = "ENTITLED_LOADING";
+  if (value.status === "entitled_pending") access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
 }
 
 onLoad((query) => {
@@ -466,9 +477,14 @@ function retryLoad(): void {
         <text class="section-copy">完整报告查看权限已关闭。你的测评结果概览仍然保留，也可以重新解锁这份专属报告。</text>
       </view>
 
+      <view v-if="access === 'ENTITLED_LOADING'" class="recovery-card card">
+        <text class="section-title">付款已确认，正在生成完整报告……</text>
+        <text class="section-copy">完整报告准备完成后会自动展示，你不需要再次付款。</text>
+      </view>
+
       <view v-if="access === 'ENTITLED_TEMPORARY_UNAVAILABLE'" class="recovery-card card">
         <text class="section-title">{{ historyEntitlementUncertain ? '报告权益状态暂时无法确认' : '报告正在同步' }}</text>
-        <text class="section-copy">{{ historyEntitlementUncertain ? '请重新加载报告，你不需要再次付款。' : '你不需要再次付款，稍后可继续查看本次报告。' }}</text>
+        <text class="section-copy">{{ historyEntitlementUncertain ? '请重新加载报告，你不需要再次付款。' : '付款已完成，完整报告暂时未能加载。请稍后重试。' }}</text>
         <button class="retry-button" @click="readReport(true)">重新加载报告</button>
       </view>
 

@@ -45,7 +45,12 @@ void (async () => {
     assert(network.status === "pending" && clears.length === 0, "network failures become recoverable pending");
     calls.length = clears.length = 0;
     const reportFailure = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), fetchFullReport: async () => { throw new Error("temporary"); } } });
-    assert(reportFailure.status === "failed" && reportFailure.safeCode === "FULL_REPORT_UNAVAILABLE" && clears.length === 0, "report failure retains pending");
+    assert(reportFailure.status === "entitled_pending" && reportFailure.safeCode === "FULL_REPORT_TEMPORARILY_UNAVAILABLE" && clears.length === 0, "paid report failure retains pending without becoming a payment failure");
+    calls.length = clears.length = delays.length = 0;
+    let reportReads = 0;
+    const reportStates: string[] = [];
+    const reportEventuallyReady = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), fetchFullReport: async () => { reportReads += 1; if (reportReads < 3) throw new Error("temporary"); return { full: "report" }; }, onStateChange: (status: string) => { reportStates.push(status); } } });
+    assert(reportEventuallyReady.status === "paid" && reportReads === 3 && clears.length === 1 && reportStates.includes("entitled_loading"), "a paid order enters entitled loading and retries the report before unlocking");
     calls.length = clears.length = 0;
     const alreadyPurchased = await flow.startGoalFitVirtualPaymentFlow({ assessmentId: "asm_1", dependencies: { ...base(), preparePayment: async () => { throw new Error("ALREADY_PURCHASED"); } } });
     assert(alreadyPurchased.status === "paid" && alreadyPurchased.report && calls.includes("report") && !calls.includes("invoke"), "ALREADY_PURCHASED recovers the authoritative report without invoking payment");
