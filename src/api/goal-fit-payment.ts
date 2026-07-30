@@ -35,6 +35,9 @@ export class GoalFitPaymentContractError extends ApiError {
     this.name = "GoalFitPaymentContractError";
   }
 }
+export class GoalFitPurchasesContractError extends GoalFitPaymentContractError {
+  constructor(readonly parserStage: "root" | "purchases_array" | "purchase_item", readonly responseRootKeys: string[], readonly purchasesType: "array" | "missing" | "other") { super("INVALID_FULL_REPORT_RESPONSE"); this.name = "GoalFitPurchasesContractError"; }
+}
 
 let paymentRequestClient: PaymentRequestClient = request;
 
@@ -221,12 +224,10 @@ export async function fetchGoalFitPurchases(): Promise<GoalFitPurchaseListRespon
     path: "/api/miniapp/goal-fit/purchases",
     requiresMiniappAuth: true,
   });
-  if (!response || typeof response !== "object" || Array.isArray(response)) {
-    throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
-  }
+  if (!response || typeof response !== "object" || Array.isArray(response)) throw new GoalFitPurchasesContractError("root", [], "other");
   const purchases = (response as Record<string, unknown>).purchases;
-  if (!Array.isArray(purchases) || !purchases.every(isPurchaseListItem)) {
-    throw new GoalFitPaymentContractError("INVALID_FULL_REPORT_RESPONSE");
-  }
+  const keys = Object.keys(response as Record<string, unknown>).slice(0, 20);
+  if (!Array.isArray(purchases)) throw new GoalFitPurchasesContractError("purchases_array", keys, purchases === undefined ? "missing" : "other");
+  if (!purchases.every(isPurchaseListItem)) throw new GoalFitPurchasesContractError("purchase_item", keys, "array");
   return { purchases };
 }
