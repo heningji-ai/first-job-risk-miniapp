@@ -10,5 +10,5 @@ for (const token of ["fetchGoalFitPurchases", "GoalFitPurchasesContractError", "
 assert(routes.includes("pages/my-reports/index"), "my reports route missing");
 for (const token of ["historyMode", "loadHistory", "readGoalFitHistoryReportRecovery", "saveGoalFitHistoryReportRecovery", "canPurchaseThisHistoryReport", "REFUNDED", "historyRequested && requestedAssessmentId", "assessmentId.value!==requestedId", "ENTITLED_TEMPORARY_UNAVAILABLE", "updateNavigationTitle", "报告详情", "免费结果"]) assert(detail.includes(token), `history detail behavior missing ${token}`);
 assert(!detail.includes("prepareGoalFitVirtualPayment"), "history page must not directly prepare payments");
-assert(detail.includes("fetchLatestGoalFitPurchase"), "existing latest recovery must remain available");
+assert(detail.includes("fetchGoalFitPurchases") && detail.includes("reconcilePaymentAndEntitlement"), "assessment-scoped entitlement recovery must remain available");
 console.log("My reports M2 page and history isolation tests passed.");

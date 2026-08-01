@@ -79,6 +79,7 @@ assert(source.includes("showPaymentReassurance") && source.includes("正在确�
 assert(source.includes("purchaseGuidance") && source.includes("high_risk") && source.includes("good_match") && source.includes("not_priority"), "score-based purchase guidance must use the existing conclusion level only");
 assert(source.includes("goalFitPrivateEntryConfig.wecomUrl") && source.includes("goalFitPrivateEntryConfig.serviceAccountUrl"), "private entries must be configuration-driven and independently optional");
 assert(source.includes("full_report_private_entry_exposed") && source.includes("full_report_wecom_clicked") && source.includes("full_report_service_account_clicked"), "private entry analytics must use safe event names");
+assert(source.includes("miniappBuildFingerprint") && source.includes("miniapp_build_fingerprint"), "safe build fingerprint diagnostics must be uploaded through analytics");
 assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "all-terminal conversion must retain a body purchase entry in addition to the fixed CTA");
 assert(source.includes("v-if=\"showConversionArea\" class=\"inline-purchase card\""), "every conversion state must render the body purchase card");
 assert(source.includes("purchase-value-grid") && source.includes("purchase-price-value"), "the purchase card must render proof counts and the fixed price");

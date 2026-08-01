@@ -12,6 +12,7 @@ import { trackEvent } from "@/analytics";
 import { clearGoalFitHistoryReportRecovery, readGoalFitHistoryReportRecovery, saveGoalFitHistoryReportRecovery } from "@/storage/goal-fit-history-report";
 import { getPendingGoalFitPaymentConfirmation } from "@/storage/goal-fit-pending-payment";
 import { goalFitPrivateEntryConfig } from "@/config/goal-fit-private-entry";
+import { miniappBuildFingerprint } from "@/config/build-fingerprint";
 
 const result = ref<OfficialFreeResult | null>(null);
 const proof = ref<GoalFitReportValueProof | null>(null);
@@ -453,6 +454,7 @@ function state(value: GoalFitVirtualPaymentState): void {
 
 onLoad((query) => {
   setWechatVirtualPaymentDiagnosticReporter((event, options) => trackEvent(event, options));
+  void trackEvent("miniapp_build_fingerprint", { metadata: miniappBuildFingerprint });
   unsub = subscribeGoalFitVirtualPaymentState(state);
   const requestedAssessmentId = typeof query?.assessmentId === "string" && /^asm_[A-Za-z0-9_-]{8,}$/.test(query.assessmentId) ? query.assessmentId : "";
   const requestedSessionId = typeof query?.sessionId === "string" ? query.sessionId : "";
