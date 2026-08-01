@@ -78,6 +78,12 @@ assert(source.includes("getPendingGoalFitPaymentConfirmation") && source.include
 assert(source.includes("retryPaidReport") && source.includes("reconcilePaymentAndEntitlement(\"retry\")"), "report reload must reconcile entitlement without invoking prepare");
 assert(source.includes("showPaymentReassurance") && source.includes("正在确认付款结果") && source.includes("付款已完成"), "reassurance modal must derive from entitlement states only");
 assert(source.includes("purchaseGuidance") && source.includes("high_risk") && source.includes("good_match") && source.includes("not_priority"), "score-based purchase guidance must use the existing conclusion level only");
+for (const guidance of [
+  "如果你还准备继续投这个方向，就更不能只凭感觉继续投。完整报告会帮你看清：你最容易在哪些工作场景里吃亏，为什么会被质疑，以及面试和入职前要重点补哪些准备。",
+  "这个方向不是不能选，但你不能只看分数就开始投。完整报告会进一步告诉你：你会在哪些工作场景里承压、被挑战，哪些问题需要在面试里提前确认。",
+  "分数高，说明这个方向值得继续，但不代表你可以直接盲投。完整报告会帮你把现在的优势变成更有说服力的面试表达，也会提醒你入职后最容易忽略的风险点。",
+]) assert(source.includes(guidance), "purchase guidance must render the approved copy for each existing conclusion level");
+assert(source.includes("完整报告会继续帮你看清：") && source.indexOf("完整报告会继续帮你看清：") < source.indexOf("purchase-value-grid"), "the purchase card must introduce the proof counts with the approved value title");
 assert(source.includes("goalFitPrivateEntryConfig.serviceAccountQrPath") && privateEntryConfig.includes("/static/private-entry/service-account.jpg"), "service-account QR must use the configured original static JPG path");
 assert(source.includes("service_account_entry_exposed") && source.includes("service_account_entry_clicked") && source.includes("service_account_qr_previewed"), "service-account analytics must use the unified safe event names");
 assert(source.includes("serviceAccountEntryPageState === 'free_result'") && source.includes("serviceAccountEntryPageState === 'full_report'"), "both free result and unlocked full report must expose the same service-account entry");
