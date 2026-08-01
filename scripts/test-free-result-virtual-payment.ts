@@ -77,6 +77,8 @@ assert(source.includes("getPendingGoalFitPaymentConfirmation") && source.include
 assert(source.includes("retryPaidReport") && source.includes("reconcilePaymentAndEntitlement(\"retry\")"), "report reload must reconcile entitlement without invoking prepare");
 assert(source.includes("showPaymentReassurance") && source.includes("正在确认付款结果") && source.includes("付款已完成"), "reassurance modal must derive from entitlement states only");
 assert(source.includes("purchaseGuidance") && source.includes("high_risk") && source.includes("good_match") && source.includes("not_priority"), "score-based purchase guidance must use the existing conclusion level only");
+assert(source.includes("goalFitPrivateEntryConfig.wecomUrl") && source.includes("goalFitPrivateEntryConfig.serviceAccountUrl"), "private entries must be configuration-driven and independently optional");
+assert(source.includes("full_report_private_entry_exposed") && source.includes("full_report_wecom_clicked") && source.includes("full_report_service_account_clicked"), "private entry analytics must use safe event names");
 assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "all-terminal conversion must retain a body purchase entry in addition to the fixed CTA");
 assert(source.includes("v-if=\"showConversionArea\" class=\"inline-purchase card\""), "every conversion state must render the body purchase card");
 assert(source.includes("purchase-value-grid") && source.includes("purchase-price-value"), "the purchase card must render proof counts and the fixed price");

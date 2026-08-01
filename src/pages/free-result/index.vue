@@ -11,6 +11,7 @@ import { hasReportConversion, type GoalFitReportConversion, type GoalFitReportVa
 import { trackEvent } from "@/analytics";
 import { clearGoalFitHistoryReportRecovery, readGoalFitHistoryReportRecovery, saveGoalFitHistoryReportRecovery } from "@/storage/goal-fit-history-report";
 import { getPendingGoalFitPaymentConfirmation } from "@/storage/goal-fit-pending-payment";
+import { goalFitPrivateEntryConfig } from "@/config/goal-fit-private-entry";
 
 const result = ref<OfficialFreeResult | null>(null);
 const proof = ref<GoalFitReportValueProof | null>(null);
@@ -172,6 +173,13 @@ function switchPaidView(view: "overview" | "full"): void {
   activePaidView.value = view;
   uni.pageScrollTo({ scrollTop: 0, duration: 0 });
 }
+function openPrivateEntry(entry: "wecom" | "service_account"): void {
+  const url = entry === "wecom" ? goalFitPrivateEntryConfig.wecomUrl : goalFitPrivateEntryConfig.serviceAccountUrl;
+  if (!url) return;
+  void trackEvent(entry === "wecom" ? "full_report_wecom_clicked" : "full_report_service_account_clicked", { metadata: { reportFormat: access.value } });
+  if (url.startsWith("/pages/")) uni.navigateTo({ url });
+  else uni.setClipboardData({ data: url, showToast: true });
+}
 
 
 watch([assessmentId, conversion], () => {
@@ -181,6 +189,11 @@ watch([assessmentId, conversion], () => {
 watch(canPay, (value) => {
   if (value && !lastCanPay) diagnostic("payment_button_enabled", { source: "free_result", contextMatch: true });
   lastCanPay = value;
+});
+watch([conversion, access], () => {
+  if (conversion.value && access.value === "UNLOCKED_V2" && (goalFitPrivateEntryConfig.wecomUrl || goalFitPrivateEntryConfig.serviceAccountUrl)) {
+    void trackEvent("full_report_private_entry_exposed", { metadata: { wecomConfigured: !!goalFitPrivateEntryConfig.wecomUrl, serviceAccountConfigured: !!goalFitPrivateEntryConfig.serviceAccountUrl } });
+  }
 });
 
 function save(): void {
@@ -490,6 +503,13 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
           <text class="tag">{{ proof.roleName }}</text>
           <text class="report-type">{{ proof.reportTypeTitle }}</text>
         </view>
+        <view v-if="access === 'UNLOCKED_V2' && (goalFitPrivateEntryConfig.wecomUrl || goalFitPrivateEntryConfig.serviceAccountUrl)" class="private-entry card">
+          <text class="section-title">你的问题，可能还需要结合真实情况判断</text>
+          <text class="section-copy">这份报告能帮你提前识别风险，但你的专业背景、目标岗位、公司环境和直属领导不同，最终遇到的问题也会不同。</text>
+          <button v-if="goalFitPrivateEntryConfig.wecomUrl" class="private-primary" @click="openPrivateEntry('wecom')">找猎头季哥进一步判断</button>
+          <text v-if="goalFitPrivateEntryConfig.wecomUrl" class="private-copy">添加后可以发送你的目标岗位、当前求职阶段，以及这份报告中最担心的问题。</text>
+          <text v-if="goalFitPrivateEntryConfig.serviceAccountUrl" class="private-secondary" @click="openPrivateEntry('service_account')">暂时不需要一对一沟通？关注服务号，继续获取求职和入职提醒。</text>
+        </view>
       </view>
 
       <template v-if="proof && (!report || (conversion && activePaidView === 'overview'))">
@@ -593,4 +613,5 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
 .paid-view-switch{display:flex;gap:10rpx;margin-bottom:20rpx;padding:10rpx;background:#edf0f6}.paid-view-button{flex:1;margin:0;padding:16rpx 12rpx;border:0;border-radius:14rpx;background:transparent;color:#687286;font-size:27rpx;font-weight:600;line-height:1.35}.paid-view-button.active{background:#fff;color:#4057d6;box-shadow:0 4rpx 12rpx rgba(43,55,88,.08)}
 .payment-modal-mask{position:fixed;z-index:30;inset:0;display:flex;align-items:center;justify-content:center;padding:48rpx;background:rgba(20,28,45,.42)}.payment-modal{width:100%;max-width:620rpx}
 .purchase-guidance{display:block;margin:0 0 18rpx;color:#4f5a70;font-size:27rpx;line-height:1.6}
+.private-entry{margin-top:24rpx;border:1rpx solid #e1e6ff}.private-primary{margin-top:22rpx;background:#4057d6;color:#fff;font-size:30rpx;font-weight:700}.private-copy{display:block;margin-top:12rpx;color:#6f788d;font-size:24rpx;line-height:1.55}.private-secondary{display:block;margin-top:22rpx;color:#4057d6;font-size:25rpx;line-height:1.55}
 </style>
