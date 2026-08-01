@@ -94,6 +94,12 @@ const canPay = computed(() => paymentFlowBlockedReason() === null);
 const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
 const paymentFailureNotice = computed(() => payment.value.safeCode === "PAYMENT_INVOKE_TIMEOUT" ? "未能调起支付，请重试" : "");
 const showPaymentReassurance = computed(() => ["CONFIRMING_PAYMENT", "ENTITLED_LOADING", "ENTITLED_TEMPORARY_UNAVAILABLE"].includes(access.value));
+const purchaseGuidance = computed(() => {
+  const level = result.value?.overallConclusion?.level;
+  if (level === "high_match" || level === "good_match") return "这个方向与你当前的工作方式较为匹配，但适合不等于一定能做好。完整报告会帮你把优势转化为面试表达和入职后的稳定表现。";
+  if (level === "high_risk" || level === "not_priority") return "如果你仍准备继续这个方向，更需要提前看清自己最容易在哪些工作场景中受挫。完整报告会告诉你风险会怎样出现，以及面试和入职前应该确认什么。";
+  return "这个方向并非不能选择，但能否顺利适应，取决于你如何应对几类关键工作压力。完整报告会帮你找到具体风险和准备方法。";
+});
 
 function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -519,6 +525,7 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
       </template>
 
       <view v-if="showConversionArea" class="inline-purchase card">
+        <text class="purchase-guidance">{{ purchaseGuidance }}</text>
         <text class="section-title">你的专属报告已经生成</text>
         <text class="section-copy">围绕本次测评中的3个重点问题，查看入职准备、行动提醒和面试确认问题。</text>
         <view class="purchase-value-grid">
@@ -585,4 +592,5 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
 .full-report{margin-top:24rpx}.report-overview{display:flex;flex-direction:column;gap:18rpx;margin-top:18rpx}.overview-card{padding:28rpx 30rpx;border-radius:22rpx}.strength-card{background:#f1f4ff;border:1rpx solid #e1e6ff}.risk-overview-card{background:#f8f5f2;border:1rpx solid #eee4dc}.overview-label{display:block;color:#303b58;font-size:26rpx;font-weight:700}.overview-copy{display:block;margin-top:12rpx;color:#4f5a70;font-size:29rpx;line-height:1.65;word-break:break-word}.report-section-card{margin-top:20rpx;padding:0;overflow:hidden}.section-toggle{display:flex;gap:20rpx;padding:28rpx 28rpx 24rpx}.section-toggle-content{flex:1;min-width:0}.section-action{display:block;margin-top:18rpx;color:#4057d6;font-size:25rpx;font-weight:600}.section-detail{padding:0 28rpx 30rpx;border-top:1rpx solid #edf0f6}.detail-group{padding-top:26rpx}.detail-group-title{display:block;color:#303b58;font-size:28rpx;font-weight:700}.detail-copy{display:block;margin-top:12rpx;color:#5f6880;font-size:27rpx;line-height:1.65;word-break:break-word}.scenario-card{margin-top:16rpx;padding:20rpx;border-radius:16rpx;background:#f7f8fb}.scenario-index,.scenario-label{display:block;color:#6574c8;font-size:23rpx;font-weight:600}.scenario-label{margin-top:16rpx;color:#687286}.detail-list-item{display:flex;gap:14rpx;margin-top:14rpx;padding:16rpx;border-radius:14rpx;background:#f7f8fb}.detail-list-item .detail-copy{flex:1;min-width:0;margin-top:0}.detail-list-index{flex:0 0 34rpx;width:34rpx;height:34rpx;border-radius:50%;background:#e9edff;color:#4057d6;font-size:22rpx;line-height:34rpx;text-align:center}
 .paid-view-switch{display:flex;gap:10rpx;margin-bottom:20rpx;padding:10rpx;background:#edf0f6}.paid-view-button{flex:1;margin:0;padding:16rpx 12rpx;border:0;border-radius:14rpx;background:transparent;color:#687286;font-size:27rpx;font-weight:600;line-height:1.35}.paid-view-button.active{background:#fff;color:#4057d6;box-shadow:0 4rpx 12rpx rgba(43,55,88,.08)}
 .payment-modal-mask{position:fixed;z-index:30;inset:0;display:flex;align-items:center;justify-content:center;padding:48rpx;background:rgba(20,28,45,.42)}.payment-modal{width:100%;max-width:620rpx}
+.purchase-guidance{display:block;margin:0 0 18rpx;color:#4f5a70;font-size:27rpx;line-height:1.6}
 </style>
