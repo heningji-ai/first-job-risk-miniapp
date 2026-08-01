@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const source = fs.readFileSync("src/pages/free-result/index.vue", "utf8");
+const privateEntryConfig = fs.readFileSync("src/config/goal-fit-private-entry.ts", "utf8");
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 
 for (const token of [
@@ -77,8 +78,11 @@ assert(source.includes("getPendingGoalFitPaymentConfirmation") && source.include
 assert(source.includes("retryPaidReport") && source.includes("reconcilePaymentAndEntitlement(\"retry\")"), "report reload must reconcile entitlement without invoking prepare");
 assert(source.includes("showPaymentReassurance") && source.includes("正在确认付款结果") && source.includes("付款已完成"), "reassurance modal must derive from entitlement states only");
 assert(source.includes("purchaseGuidance") && source.includes("high_risk") && source.includes("good_match") && source.includes("not_priority"), "score-based purchase guidance must use the existing conclusion level only");
-assert(source.includes("goalFitPrivateEntryConfig.wecomUrl") && source.includes("goalFitPrivateEntryConfig.serviceAccountUrl"), "private entries must be configuration-driven and independently optional");
-assert(source.includes("full_report_private_entry_exposed") && source.includes("full_report_wecom_clicked") && source.includes("full_report_service_account_clicked"), "private entry analytics must use safe event names");
+assert(source.includes("goalFitPrivateEntryConfig.serviceAccountQrPath") && privateEntryConfig.includes("/static/private-entry/service-account.jpg"), "service-account QR must use the configured original static JPG path");
+assert(source.includes("service_account_entry_exposed") && source.includes("service_account_entry_clicked") && source.includes("service_account_qr_previewed"), "service-account analytics must use the unified safe event names");
+assert(source.includes("serviceAccountEntryPageState === 'free_result'") && source.includes("serviceAccountEntryPageState === 'full_report'"), "both free result and unlocked full report must expose the same service-account entry");
+assert(source.includes("showPaymentReassurance") && source.includes("serviceAccountExposed"), "service-account entry must hide during payment recovery and expose only once per page state");
+assert(!source.includes("wecomUrl") && !source.includes("full_report_wecom_clicked"), "WeCom entry must not render in the unified service-account layout");
 assert(source.includes("miniappBuildFingerprint") && source.includes("miniapp_build_fingerprint"), "safe build fingerprint diagnostics must be uploaded through analytics");
 assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "all-terminal conversion must retain a body purchase entry in addition to the fixed CTA");
 assert(source.includes("v-if=\"showConversionArea\" class=\"inline-purchase card\""), "every conversion state must render the body purchase card");

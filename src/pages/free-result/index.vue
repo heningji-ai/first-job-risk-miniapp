@@ -30,12 +30,14 @@ const expandedSections = ref<Set<number>>(new Set([0]));
 const activePaidView = ref<"overview" | "full">("full");
 const historyMode = ref(false);
 const historyEntitlementUncertain = ref(false);
+const serviceAccountQrOpen = ref(false);
 let session: GoalFitCompletedSessionV1 | null = null;
 let active = true;
 let unsub: (() => void) | undefined;
 let autoRetries = 0;
 let loadVersion = 0;
 let lastCanPay = false;
+const serviceAccountExposed = new Set<"free_result" | "full_report">();
 let reconcileGeneration = 0;
 let reconcilePromise: Promise<void> | null = null;
 
@@ -96,6 +98,12 @@ const canPay = computed(() => paymentFlowBlockedReason() === null);
 const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
 const paymentFailureNotice = computed(() => payment.value.safeCode === "PAYMENT_INVOKE_TIMEOUT" ? "未能调起支付，请重试" : "");
 const showPaymentReassurance = computed(() => ["CONFIRMING_PAYMENT", "ENTITLED_LOADING", "ENTITLED_TEMPORARY_UNAVAILABLE"].includes(access.value));
+const serviceAccountEntryPageState = computed<"free_result" | "full_report" | null>(() => {
+  if (pageState.value !== "ready" || showPaymentReassurance.value || !goalFitPrivateEntryConfig.serviceAccountQrPath) return null;
+  if (access.value === "UNLOCKED_V2" && report.value) return "full_report";
+  if (!report.value && result.value) return "free_result";
+  return null;
+});
 const purchaseGuidance = computed(() => {
   const level = result.value?.overallConclusion?.level;
   if (level === "high_match" || level === "good_match") return "这个方向与你当前的工作方式较为匹配，但适合不等于一定能做好。完整报告会帮你把优势转化为面试表达和入职后的稳定表现。";
@@ -174,12 +182,20 @@ function switchPaidView(view: "overview" | "full"): void {
   activePaidView.value = view;
   uni.pageScrollTo({ scrollTop: 0, duration: 0 });
 }
-function openPrivateEntry(entry: "wecom" | "service_account"): void {
-  const url = entry === "wecom" ? goalFitPrivateEntryConfig.wecomUrl : goalFitPrivateEntryConfig.serviceAccountUrl;
-  if (!url) return;
-  void trackEvent(entry === "wecom" ? "full_report_wecom_clicked" : "full_report_service_account_clicked", { metadata: { reportFormat: access.value } });
-  if (url.startsWith("/pages/")) uni.navigateTo({ url });
-  else uni.setClipboardData({ data: url, showToast: true });
+function showServiceAccountQr(): void {
+  const pageState = serviceAccountEntryPageState.value;
+  if (!pageState || !goalFitPrivateEntryConfig.serviceAccountQrPath) return;
+  void trackEvent("service_account_entry_clicked", { metadata: { pageState } });
+  serviceAccountQrOpen.value = true;
+}
+function previewServiceAccountQr(): void {
+  const pageState = serviceAccountEntryPageState.value;
+  if (!pageState || !goalFitPrivateEntryConfig.serviceAccountQrPath) return;
+  uni.previewImage({
+    current: goalFitPrivateEntryConfig.serviceAccountQrPath,
+    urls: [goalFitPrivateEntryConfig.serviceAccountQrPath],
+    success: () => { void trackEvent("service_account_qr_previewed", { metadata: { pageState } }); },
+  });
 }
 
 
@@ -191,9 +207,10 @@ watch(canPay, (value) => {
   if (value && !lastCanPay) diagnostic("payment_button_enabled", { source: "free_result", contextMatch: true });
   lastCanPay = value;
 });
-watch([conversion, access], () => {
-  if (conversion.value && access.value === "UNLOCKED_V2" && (goalFitPrivateEntryConfig.wecomUrl || goalFitPrivateEntryConfig.serviceAccountUrl)) {
-    void trackEvent("full_report_private_entry_exposed", { metadata: { wecomConfigured: !!goalFitPrivateEntryConfig.wecomUrl, serviceAccountConfigured: !!goalFitPrivateEntryConfig.serviceAccountUrl } });
+watch(serviceAccountEntryPageState, (pageState) => {
+  if (pageState && !serviceAccountExposed.has(pageState)) {
+    serviceAccountExposed.add(pageState);
+    void trackEvent("service_account_entry_exposed", { metadata: { pageState } });
   }
 });
 
@@ -505,13 +522,6 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
           <text class="tag">{{ proof.roleName }}</text>
           <text class="report-type">{{ proof.reportTypeTitle }}</text>
         </view>
-        <view v-if="access === 'UNLOCKED_V2' && (goalFitPrivateEntryConfig.wecomUrl || goalFitPrivateEntryConfig.serviceAccountUrl)" class="private-entry card">
-          <text class="section-title">你的问题，可能还需要结合真实情况判断</text>
-          <text class="section-copy">这份报告能帮你提前识别风险，但你的专业背景、目标岗位、公司环境和直属领导不同，最终遇到的问题也会不同。</text>
-          <button v-if="goalFitPrivateEntryConfig.wecomUrl" class="private-primary" @click="openPrivateEntry('wecom')">找猎头季哥进一步判断</button>
-          <text v-if="goalFitPrivateEntryConfig.wecomUrl" class="private-copy">添加后可以发送你的目标岗位、当前求职阶段，以及这份报告中最担心的问题。</text>
-          <text v-if="goalFitPrivateEntryConfig.serviceAccountUrl" class="private-secondary" @click="openPrivateEntry('service_account')">暂时不需要一对一沟通？关注服务号，继续获取求职和入职提醒。</text>
-        </view>
       </view>
 
       <template v-if="proof && (!report || (conversion && activePaidView === 'overview'))">
@@ -562,6 +572,7 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
         <text v-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text>
         <text class="inline-purchase-copy">一次购买，长期查看本次报告</text>
       </view>
+      <view v-if="serviceAccountEntryPageState === 'free_result'" class="service-account-entry service-account-entry-free" role="button" @click="showServiceAccountQr"><text>还想获得更多求职帮助？关注猎头季哥服务号</text></view>
 
       <view v-if="access === 'REFUNDED'" class="refund-card card">
         <text class="section-title">该报告已退款</text>
@@ -603,6 +614,8 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
     </view>
     <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="!purchaseStateLoaded" class="cta-copy">正在确认购买状态</text><text v-else-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">报告生成中</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
     <view v-if="showPaymentReassurance" class="payment-modal-mask"><view class="payment-modal card"><template v-if="access === 'CONFIRMING_PAYMENT'"><text class="section-title">正在确认付款结果</text><text class="section-copy">请稍候，不要重复支付。确认完成后将自动为你打开完整报告。</text></template><template v-else-if="access === 'ENTITLED_LOADING'"><text class="section-title">付款已完成</text><text class="section-copy">正在为你生成完整报告，通常只需要几秒钟。</text></template><template v-else><text class="section-title">付款已经完成，请放心，不会重复扣费</text><text class="section-copy">完整报告暂时未能加载，你可以稍后重新打开，或点击下方按钮继续加载。</text><button class="retry-button" @click="retryPaidReport">重新加载报告</button></template></view></view>
+    <view v-if="serviceAccountEntryPageState === 'full_report'" class="service-account-entry service-account-entry-fixed" role="button" @click="showServiceAccountQr"><text>关注服务号</text></view>
+    <view v-if="serviceAccountQrOpen" class="service-account-modal-mask" @click.self="serviceAccountQrOpen = false"><view class="service-account-modal card"><text class="section-title">继续获得求职帮助</text><text class="section-copy">关注猎头季哥服务号，获取求职、简历和面试方面的后续内容。需要进一步判断时，可以回复“预演报告”。</text><text class="section-copy">长按识别二维码关注</text><image class="service-account-qr" :src="goalFitPrivateEntryConfig.serviceAccountQrPath" mode="widthFix" @click="previewServiceAccountQr" /></view></view>
   </view>
 </template>
 
@@ -615,5 +628,5 @@ function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry");
 .paid-view-switch{display:flex;gap:10rpx;margin-bottom:20rpx;padding:10rpx;background:#edf0f6}.paid-view-button{flex:1;margin:0;padding:16rpx 12rpx;border:0;border-radius:14rpx;background:transparent;color:#687286;font-size:27rpx;font-weight:600;line-height:1.35}.paid-view-button.active{background:#fff;color:#4057d6;box-shadow:0 4rpx 12rpx rgba(43,55,88,.08)}
 .payment-modal-mask{position:fixed;z-index:30;inset:0;display:flex;align-items:center;justify-content:center;padding:48rpx;background:rgba(20,28,45,.42)}.payment-modal{width:100%;max-width:620rpx}
 .purchase-guidance{display:block;margin:0 0 18rpx;color:#4f5a70;font-size:27rpx;line-height:1.6}
-.private-entry{margin-top:24rpx;border:1rpx solid #e1e6ff}.private-primary{margin-top:22rpx;background:#4057d6;color:#fff;font-size:30rpx;font-weight:700}.private-copy{display:block;margin-top:12rpx;color:#6f788d;font-size:24rpx;line-height:1.55}.private-secondary{display:block;margin-top:22rpx;color:#4057d6;font-size:25rpx;line-height:1.55}
+.service-account-entry{color:#4057d6;font-size:25rpx;line-height:1.5;text-align:center}.service-account-entry-free{margin-top:20rpx}.service-account-entry-fixed{position:fixed;right:28rpx;bottom:calc(34rpx + env(safe-area-inset-bottom));z-index:12;padding:18rpx 26rpx;border-radius:999rpx;background:#fff;box-shadow:0 8rpx 24rpx rgba(43,55,88,.16)}.service-account-modal-mask{position:fixed;z-index:40;inset:0;display:flex;align-items:center;justify-content:center;padding:48rpx;background:rgba(20,28,45,.42)}.service-account-modal{width:100%;max-width:650rpx}.service-account-qr{display:block;width:440rpx;max-width:100%;margin:24rpx auto 0;border-radius:14rpx}
 </style>
