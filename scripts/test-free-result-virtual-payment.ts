@@ -41,6 +41,9 @@ for (const token of [
   "reconcilePaymentAndEntitlement",
   "ENTITLED_LOADING",
   "ENTITLED_TEMPORARY_UNAVAILABLE",
+  "正在确认付款结果",
+  "付款已经完成，请放心，不会重复扣费",
+  "重新加载报告",
   "readGoalFitHistoryReportRecovery",
 ]) assert(source.includes(token), `missing free-result layout contract: ${token}`);
 
@@ -71,6 +74,8 @@ assert(source.includes("fetchGoalFitPurchases") && source.includes("purchases.pu
 assert(source.includes("Unknown server state is deliberately non-purchasable") && source.includes("ENTITLED_TEMPORARY_UNAVAILABLE"), "an entitlement lookup failure must not reopen purchase");
 assert(source.includes("const accessPriority") && source.includes("function setAccess"), "payment access must reject stale lower-priority state writes");
 assert(source.includes("getPendingGoalFitPaymentConfirmation") && source.includes("reconcilePaymentAndEntitlement(\"on_show\")"), "onShow must reuse pending confirmation and the unified reconciliation path");
+assert(source.includes("retryPaidReport") && source.includes("reconcilePaymentAndEntitlement(\"retry\")"), "report reload must reconcile entitlement without invoking prepare");
+assert(source.includes("showPaymentReassurance") && source.includes("正在确认付款结果") && source.includes("付款已完成"), "reassurance modal must derive from entitlement states only");
 assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "all-terminal conversion must retain a body purchase entry in addition to the fixed CTA");
 assert(source.includes("v-if=\"showConversionArea\" class=\"inline-purchase card\""), "every conversion state must render the body purchase card");
 assert(source.includes("purchase-value-grid") && source.includes("purchase-price-value"), "the purchase card must render proof counts and the fixed price");

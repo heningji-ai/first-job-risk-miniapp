@@ -93,6 +93,7 @@ function paymentFlowBlockedReason(): PaymentFlowBlockedReason | null {
 const canPay = computed(() => paymentFlowBlockedReason() === null);
 const paymentCapabilityUnavailable = computed(() => showConversionArea.value && isWechatMiniapp.value && !virtualPaymentSupported.value);
 const paymentFailureNotice = computed(() => payment.value.safeCode === "PAYMENT_INVOKE_TIMEOUT" ? "未能调起支付，请重试" : "");
+const showPaymentReassurance = computed(() => ["CONFIRMING_PAYMENT", "ENTITLED_LOADING", "ENTITLED_TEMPORARY_UNAVAILABLE"].includes(access.value));
 
 function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -460,6 +461,7 @@ function retryLoad(): void {
   if (historyMode.value && assessmentId.value) void loadHistory(assessmentId.value);
   else void load(session?.id ?? "", assessmentId.value);
 }
+function retryPaidReport(): void { void reconcilePaymentAndEntitlement("retry"); }
 </script>
 
 <template>
@@ -571,6 +573,7 @@ function retryLoad(): void {
       <view class="page-actions"><text class="home-link" @click="home">返回首页</text></view>
     </view>
     <view v-if="showConversionArea" class="fixed-cta"><view class="cta-inner"><text class="fixed-value-copy">{{ valueCounts[0].value }}个场景 · {{ valueCounts[1].value }}项训练 · {{ valueCounts[2].value }}个面试问题</text><button v-if="canPay" class="unlock-button" @click="unlock">{{ isRefunded ? '¥19.9 重新解锁专属报告' : '¥19.9 解锁你的专属报告' }}</button><button v-else class="unlock-button" disabled>¥19.9 解锁你的专属报告</button><text v-if="!purchaseStateLoaded" class="cta-copy">正在确认购买状态</text><text v-else-if="paymentCapabilityUnavailable" class="platform-copy">当前微信版本暂不支持虚拟支付，请升级微信后重试</text><text v-else-if="paymentFailureNotice" class="platform-copy">{{ paymentFailureNotice }}</text><text v-else-if="!canPay && isWechatMiniapp && virtualPaymentSupported" class="cta-copy">报告生成中</text><text v-else-if="!canPay" class="platform-copy">请在支持虚拟支付的微信客户端中完成支付</text><text v-else class="cta-copy">一次购买，长期查看本次报告</text></view></view>
+    <view v-if="showPaymentReassurance" class="payment-modal-mask"><view class="payment-modal card"><template v-if="access === 'CONFIRMING_PAYMENT'"><text class="section-title">正在确认付款结果</text><text class="section-copy">请稍候，不要重复支付。确认完成后将自动为你打开完整报告。</text></template><template v-else-if="access === 'ENTITLED_LOADING'"><text class="section-title">付款已完成</text><text class="section-copy">正在为你生成完整报告，通常只需要几秒钟。</text></template><template v-else><text class="section-title">付款已经完成，请放心，不会重复扣费</text><text class="section-copy">完整报告暂时未能加载，你可以稍后重新打开，或点击下方按钮继续加载。</text><button class="retry-button" @click="retryPaidReport">重新加载报告</button></template></view></view>
   </view>
 </template>
 
@@ -581,4 +584,5 @@ function retryLoad(): void {
 .purchase-value-grid{display:flex;gap:12rpx;margin-top:22rpx}.purchase-value-item{flex:1;min-width:0;padding:16rpx 8rpx;background:#f5f7ff;border-radius:14rpx;text-align:center}.purchase-value-number{display:block;color:#4057d6;font-size:34rpx;font-weight:700}.purchase-value-label{display:block;margin-top:8rpx;color:#5f6880;font-size:21rpx;line-height:1.35}.purchase-price{display:flex;align-items:baseline;justify-content:space-between;margin-top:22rpx;padding-top:18rpx;border-top:1rpx solid #edf0f6}.purchase-price-label{color:#667086;font-size:26rpx}.purchase-price-value{color:#4057d6;font-size:40rpx;font-weight:700}.inline-platform-button{margin-top:22rpx;background:#eef1f7;color:#657089;font-size:29rpx;font-weight:600}.inline-platform-button[disabled]{opacity:1}.fixed-value-copy{display:block;margin-bottom:12rpx;color:#5f6880;font-size:24rpx;text-align:center}
 .full-report{margin-top:24rpx}.report-overview{display:flex;flex-direction:column;gap:18rpx;margin-top:18rpx}.overview-card{padding:28rpx 30rpx;border-radius:22rpx}.strength-card{background:#f1f4ff;border:1rpx solid #e1e6ff}.risk-overview-card{background:#f8f5f2;border:1rpx solid #eee4dc}.overview-label{display:block;color:#303b58;font-size:26rpx;font-weight:700}.overview-copy{display:block;margin-top:12rpx;color:#4f5a70;font-size:29rpx;line-height:1.65;word-break:break-word}.report-section-card{margin-top:20rpx;padding:0;overflow:hidden}.section-toggle{display:flex;gap:20rpx;padding:28rpx 28rpx 24rpx}.section-toggle-content{flex:1;min-width:0}.section-action{display:block;margin-top:18rpx;color:#4057d6;font-size:25rpx;font-weight:600}.section-detail{padding:0 28rpx 30rpx;border-top:1rpx solid #edf0f6}.detail-group{padding-top:26rpx}.detail-group-title{display:block;color:#303b58;font-size:28rpx;font-weight:700}.detail-copy{display:block;margin-top:12rpx;color:#5f6880;font-size:27rpx;line-height:1.65;word-break:break-word}.scenario-card{margin-top:16rpx;padding:20rpx;border-radius:16rpx;background:#f7f8fb}.scenario-index,.scenario-label{display:block;color:#6574c8;font-size:23rpx;font-weight:600}.scenario-label{margin-top:16rpx;color:#687286}.detail-list-item{display:flex;gap:14rpx;margin-top:14rpx;padding:16rpx;border-radius:14rpx;background:#f7f8fb}.detail-list-item .detail-copy{flex:1;min-width:0;margin-top:0}.detail-list-index{flex:0 0 34rpx;width:34rpx;height:34rpx;border-radius:50%;background:#e9edff;color:#4057d6;font-size:22rpx;line-height:34rpx;text-align:center}
 .paid-view-switch{display:flex;gap:10rpx;margin-bottom:20rpx;padding:10rpx;background:#edf0f6}.paid-view-button{flex:1;margin:0;padding:16rpx 12rpx;border:0;border-radius:14rpx;background:transparent;color:#687286;font-size:27rpx;font-weight:600;line-height:1.35}.paid-view-button.active{background:#fff;color:#4057d6;box-shadow:0 4rpx 12rpx rgba(43,55,88,.08)}
+.payment-modal-mask{position:fixed;z-index:30;inset:0;display:flex;align-items:center;justify-content:center;padding:48rpx;background:rgba(20,28,45,.42)}.payment-modal{width:100%;max-width:620rpx}
 </style>
