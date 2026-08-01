@@ -37,7 +37,10 @@ for (const token of [
   "FULL_REPORT_REFUNDED",
   "正在准备你的专属报告",
   "UNLOCKED_LEGACY",
-  "fetchLatestGoalFitPurchase",
+  "fetchGoalFitPurchases",
+  "reconcilePaymentAndEntitlement",
+  "ENTITLED_LOADING",
+  "ENTITLED_TEMPORARY_UNAVAILABLE",
   "readGoalFitHistoryReportRecovery",
 ]) assert(source.includes(token), `missing free-result layout contract: ${token}`);
 
@@ -58,14 +61,16 @@ assert(source.includes("setWechatVirtualPaymentDiagnosticReporter((event, option
 assert(source.includes("payment_flow_entered") && source.indexOf("payment_flow_entered") > source.indexOf("goal_fit_report_unlock_click"), "payment flow entry must be recorded after the click and before flow startup");
 assert(source.includes("function paymentFlowBlockedReason()") && source.includes("const canPay = computed(() => paymentFlowBlockedReason() === null)"), "button eligibility and handler eligibility must share one payment qualification function");
 assert(source.includes("payment_flow_blocked") && source.includes("reportPaymentFlowBlocked(blocked)") && source.includes("UNEXPECTED_HANDLER_ERROR"), "every blocked or synchronous-error path must emit a classified payment_flow_blocked event");
-assert(source.indexOf("const blocked = paymentFlowBlockedReason()") > source.indexOf("goal_fit_report_unlock_click") && source.indexOf("payment_flow_entered") < source.indexOf("access.value = \"PREPARING_PAYMENT\""), "payment state may only begin after the click, shared guard, and flow-entry event");
-assert(source.includes('outcome.status === "entitled_pending"') && source.includes('access.value = "ENTITLED_TEMPORARY_UNAVAILABLE"'), "a confirmed payment with a temporarily unavailable report must not become PAYMENT_FAILED");
-assert(source.includes('value.status === "entitled_loading"') && source.includes('access.value = "ENTITLED_LOADING"'), "a confirmed payment must enter the entitlement-loading state before report retrieval");
-assert(source.includes("付款已确认，正在生成完整报告") && source.includes("付款已完成，完整报告暂时未能加载"), "paid report recovery must clearly distinguish confirmation from report availability");
+assert(source.indexOf("const blocked = paymentFlowBlockedReason()") > source.indexOf("goal_fit_report_unlock_click") && source.indexOf("payment_flow_entered") < source.indexOf("setAccess(\"PREPARING_PAYMENT\""), "payment state may only begin after the click, shared guard, and flow-entry event");
+assert(source.includes('outcome.status === "entitled_pending"') && source.includes('setAccess("ENTITLED_TEMPORARY_UNAVAILABLE")'), "a confirmed payment with a temporarily unavailable report must not become PAYMENT_FAILED");
+assert(source.includes('value.status === "entitled_loading"') && source.includes('setAccess("ENTITLED_LOADING")'), "a confirmed payment must enter the entitlement-loading state before report retrieval");
 for (const reason of ["PAGE_NOT_READY", "NOT_WECHAT_MINIPROGRAM", "CAPABILITY_UNAVAILABLE", "ASSESSMENT_ID_INVALID", "RESULT_CONTEXT_MISMATCH", "SNAPSHOT_MISSING", "SNAPSHOT_CONTEXT_MISMATCH", "PROOF_MISSING", "PROOF_CONTEXT_MISMATCH", "PURCHASES_NOT_LOADED", "PURCHASE_NOT_ELIGIBLE", "PAYMENT_ALREADY_IN_PROGRESS", "HISTORY_MODE_BLOCKED"]) assert(source.includes(reason), `payment guard reason missing: ${reason}`);
 assert(source.includes("assessmentIdSuffix") && source.includes("sessionIdSuffix") && source.includes("reportSnapshotIdSuffix") && source.includes("errorMessageCategory"), "result diagnostics must use only safe identity suffixes and classified errors");
 assert(!source.includes("assessment_context_mismatch", source.indexOf("function diagnostic")) || source.includes("contextMatch"), "context mismatch diagnostics must remain classified and must not serialize raw records");
-assert(source.includes("outcome === null && !historyMode.value && !report.value") && source.includes("access.value = \"LOCKED\""), "a no-pending resume must restore a transient payment state to locked");
+assert(source.includes("fetchGoalFitPurchases") && source.includes("purchases.purchases.find((item) => item.assessmentId === requestedId)"), "pending loss must reconcile against the authoritative assessment-scoped purchases list");
+assert(source.includes("Unknown server state is deliberately non-purchasable") && source.includes("ENTITLED_TEMPORARY_UNAVAILABLE"), "an entitlement lookup failure must not reopen purchase");
+assert(source.includes("const accessPriority") && source.includes("function setAccess"), "payment access must reject stale lower-priority state writes");
+assert(source.includes("getPendingGoalFitPaymentConfirmation") && source.includes("reconcilePaymentAndEntitlement(\"on_show\")"), "onShow must reuse pending confirmation and the unified reconciliation path");
 assert(source.includes("class=\"inline-purchase card\"") && source.includes("class=\"inline-unlock-button\""), "all-terminal conversion must retain a body purchase entry in addition to the fixed CTA");
 assert(source.includes("v-if=\"showConversionArea\" class=\"inline-purchase card\""), "every conversion state must render the body purchase card");
 assert(source.includes("purchase-value-grid") && source.includes("purchase-price-value"), "the purchase card must render proof counts and the fixed price");
@@ -75,7 +80,7 @@ assert(source.includes("fixed-value-copy") && source.includes("valueCounts[0].va
 assert(source.includes("<button v-if=\"canPay\" class=\"unlock-button\"") && source.includes("<button v-else class=\"unlock-button\" disabled>"), "only capability-qualified miniapp payment may invoke the product CTA");
 assert(source.includes("请在支持虚拟支付的微信客户端中完成支付"), "unsupported environments must use a neutral virtual-payment prompt");
 assert(!source.includes("isWechatAndroid") && !source.includes("安卓微信"), "payment eligibility and copy must not be Android-specific");
-assert(source.includes("FULL_REPORT_REFUNDED") && source.includes("function setRefunded") && source.includes("access.value = \"REFUNDED\""), "refunded full reports must clear report access without exposing cached content");
+assert(source.includes("FULL_REPORT_REFUNDED") && source.includes("function setRefunded") && source.includes('setAccess("REFUNDED", { force: true })'), "refunded full reports must clear report access without exposing cached content");
 assert(source.includes("delete next.fullReport"), "refund handling must remove persisted full-report cache");
 assert(source.includes("¥19.9 重新解锁专属报告") && source.includes("该报告已退款"), "refunded reports must expose an explicit repurchase state");
 assert(source.includes("proof && (!report || (conversion && activePaidView === 'overview'))"), "free preview must render only for the free page or purchased overview view");

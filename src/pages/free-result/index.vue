@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
 import { computed, ref, watch } from "vue";
-import { fetchGoalFitFreeResult, fetchGoalFitFullReport, fetchLatestGoalFitPurchase, GoalFitReportAccessError, type GoalFitFullReportResponse } from "@/api/goal-fit-payment";
+import { fetchGoalFitFreeResult, fetchGoalFitFullReport, fetchGoalFitPurchases, GoalFitReportAccessError, type GoalFitFullReportResponse } from "@/api/goal-fit-payment";
 import { getPlatform } from "@/platform";
 import { isWechatVirtualPaymentSupported, setWechatVirtualPaymentDiagnosticReporter } from "@/services/wechat-virtual-payment";
 import { getDisplayFreeResult, readCompletedSession, saveCompletedSession, type GoalFitCompletedSessionV1, type GoalFitReportAccessState, type OfficialFreeResult } from "@/storage/goal-fit-session";
@@ -10,6 +10,7 @@ import { getActiveGoalFitVirtualPaymentState, invalidateGoalFitVirtualPaymentFlo
 import { hasReportConversion, type GoalFitReportConversion, type GoalFitReportValueProof, type GoalFitSelectedRiskPreview } from "@/types/goal-fit-report-conversion";
 import { trackEvent } from "@/analytics";
 import { clearGoalFitHistoryReportRecovery, readGoalFitHistoryReportRecovery, saveGoalFitHistoryReportRecovery } from "@/storage/goal-fit-history-report";
+import { getPendingGoalFitPaymentConfirmation } from "@/storage/goal-fit-pending-payment";
 
 const result = ref<OfficialFreeResult | null>(null);
 const proof = ref<GoalFitReportValueProof | null>(null);
@@ -33,6 +34,21 @@ let unsub: (() => void) | undefined;
 let autoRetries = 0;
 let loadVersion = 0;
 let lastCanPay = false;
+let reconcileGeneration = 0;
+let reconcilePromise: Promise<void> | null = null;
+
+const accessPriority: Record<GoalFitReportAccessState, number> = {
+  LOCKED: 0, PREPARING_PAYMENT: 1, INVOKING_PAYMENT: 2, CONFIRMING_PAYMENT: 3,
+  ENTITLED_LOADING: 4, ENTITLED_TEMPORARY_UNAVAILABLE: 5,
+  UNLOCKED_V2: 6, UNLOCKED_LEGACY: 6, PAYMENT_CANCELLED: 0, PAYMENT_FAILED: 0, REFUNDED: 0,
+};
+
+function setAccess(next: GoalFitReportAccessState, options: { force?: boolean } = {}): boolean {
+  if (!options.force && accessPriority[next] < accessPriority[access.value]) return false;
+  access.value = next;
+  updateNavigationTitle();
+  return true;
+}
 
 const conversion = computed<GoalFitReportConversion | null>(() => report.value && hasReportConversion(report.value.fullReport) ? report.value.fullReport.reportConversion : null);
 const displayOverallScore = computed<number | null>(() => {
@@ -150,6 +166,7 @@ function switchPaidView(view: "overview" | "full"): void {
   uni.pageScrollTo({ scrollTop: 0, duration: 0 });
 }
 
+
 watch([assessmentId, conversion], () => {
   expandedSections.value = conversion.value?.sections.length ? new Set([0]) : new Set();
   activePaidView.value = "full";
@@ -179,7 +196,7 @@ function save(): void {
 function setRefunded(requestedId: string): void {
   if (!active || requestedId !== assessmentId.value) return;
   report.value = null;
-  access.value = "REFUNDED";
+  setAccess("REFUNDED", { force: true });
   historyEntitlementUncertain.value = false;
   clearGoalFitHistoryReportRecovery(requestedId);
   save();
@@ -192,7 +209,7 @@ function updateNavigationTitle(): void {
 function setUnlocked(value: GoalFitFullReportResponse): void {
   if (!active || value.assessmentId !== assessmentId.value) return;
   report.value = value;
-  access.value = hasReportConversion(value.fullReport) ? "UNLOCKED_V2" : "UNLOCKED_LEGACY";
+  setAccess(hasReportConversion(value.fullReport) ? "UNLOCKED_V2" : "UNLOCKED_LEGACY");
   updateNavigationTitle();
   historyEntitlementUncertain.value = false;
   if (historyMode.value) clearGoalFitHistoryReportRecovery(value.assessmentId);
@@ -203,7 +220,7 @@ function setUnlocked(value: GoalFitFullReportResponse): void {
 async function readReport(recovery = false): Promise<void> {
   if (!assessmentId.value) return;
   const requestedId = assessmentId.value;
-  access.value = "ENTITLED_LOADING";
+  setAccess("ENTITLED_LOADING");
   save();
   try {
     setUnlocked(await fetchGoalFitFullReport(requestedId));
@@ -216,11 +233,61 @@ async function readReport(recovery = false): Promise<void> {
     }
     const temporary = caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_TEMPORARY_UNAVAILABLE";
     historyEntitlementUncertain.value = caught instanceof GoalFitReportAccessError && caught.code === "FULL_REPORT_NOT_ENTITLED" && historyMode.value;
-    access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
+    setAccess("ENTITLED_TEMPORARY_UNAVAILABLE");
     if (historyMode.value) saveGoalFitHistoryReportRecovery({ assessmentId: requestedId, recoveryPending: true });
     save();
     void trackEvent("goal_fit_report_fetch_temporary_unavailable", { metadata: { recovery, temporary } });
   }
+}
+
+/** Serializes every lifecycle and callback recovery attempt for the current assessment. */
+async function reconcilePaymentAndEntitlement(reason: "initial" | "on_show" | "payment_callback" | "retry"): Promise<void> {
+  if (!assessmentId.value || !active) return;
+  if (reconcilePromise) return reconcilePromise;
+  const generation = ++reconcileGeneration;
+  const requestedId = assessmentId.value;
+  const current = async (): Promise<void> => {
+    const isCurrent = (): boolean => active && generation === reconcileGeneration && assessmentId.value === requestedId;
+    const pending = getPendingGoalFitPaymentConfirmation({ assessmentId: requestedId });
+    // A pending attempt has precedence; its confirmation flow owns report retrieval.
+    if (pending || ["PREPARING_PAYMENT", "INVOKING_PAYMENT", "CONFIRMING_PAYMENT"].includes(access.value)) {
+      setAccess("CONFIRMING_PAYMENT");
+      const outcome = await resumeManagedGoalFitVirtualPaymentConfirmation({ assessmentId: requestedId });
+      if (!isCurrent()) return;
+      if (outcome?.status === "paid") {
+        setAccess("ENTITLED_LOADING");
+        if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
+        else await readReport(true);
+        return;
+      }
+      if (outcome?.status === "entitled_pending" || outcome?.status === "pending") {
+        setAccess("ENTITLED_TEMPORARY_UNAVAILABLE"); save(); return;
+      }
+      if (outcome && ["cancelled", "closed", "failed"].includes(outcome.status)) {
+        setAccess(outcome.status === "cancelled" || outcome.status === "closed" ? "PAYMENT_CANCELLED" : "PAYMENT_FAILED", { force: true }); save(); return;
+      }
+    }
+    // Pending storage may be absent on iOS when lifecycle callbacks race. The server list is authoritative.
+    try {
+      setAccess("ENTITLED_LOADING");
+      const purchases = await fetchGoalFitPurchases();
+      if (!isCurrent()) return;
+      purchaseStateLoaded.value = true;
+      const purchase = purchases.purchases.find((item) => item.assessmentId === requestedId);
+      if (purchase?.status === "ACTIVE" && purchase.unlocked) { await readReport(true); return; }
+      if (purchase?.status === "REFUNDED") { setRefunded(requestedId); return; }
+      if (access.value === "ENTITLED_LOADING") setAccess("LOCKED", { force: true });
+      save();
+    } catch {
+      if (!isCurrent()) return;
+      // Unknown server state is deliberately non-purchasable: avoid a duplicate charge.
+      setAccess("ENTITLED_TEMPORARY_UNAVAILABLE");
+      save();
+      void trackEvent("goal_fit_payment_reconcile_unavailable", { metadata: { reason, assessmentIdSuffix: suffix(requestedId) } });
+    }
+  };
+  reconcilePromise = current().finally(() => { if (generation === reconcileGeneration) reconcilePromise = null; });
+  return reconcilePromise;
 }
 
 async function load(sessionId: string, routeAssessmentId: string): Promise<void> {
@@ -257,7 +324,7 @@ async function load(sessionId: string, routeAssessmentId: string): Promise<void>
     return;
   }
   assessmentId.value = authoritativeId;
-  access.value = session?.reportAccessState ?? "LOCKED";
+  setAccess(session?.reportAccessState ?? "LOCKED", { force: true });
   if (session?.assessmentId && session.assessmentId !== authoritativeId) { contextMismatch("session_assessment"); return; }
   result.value = session ? getDisplayFreeResult(session) : null;
   proof.value = session?.serverFreeResult?.reportValueProof ?? null;
@@ -281,17 +348,11 @@ async function load(sessionId: string, routeAssessmentId: string): Promise<void>
       return;
     }
   }
-  try {
-    const latest = await fetchLatestGoalFitPurchase();
-    if (!active || requestVersion !== loadVersion || assessmentId.value !== authoritativeId) return;
-    purchaseStateLoaded.value = true;
-    if (latest.purchase && latest.purchase.assessmentId === authoritativeId) {
-      if (latest.purchase.status === "REFUNDED") setRefunded(authoritativeId);
-      else setUnlocked(latest.purchase);
-    }
-  } catch { purchaseStateLoaded.value = true; }
+  // This is deliberately assessment-scoped; latest purchase can belong to another report.
+  await reconcilePaymentAndEntitlement("initial");
+  if (!active || requestVersion !== loadVersion || assessmentId.value !== authoritativeId) return;
   if (!active || requestVersion !== loadVersion) return;
-  if (session?.reportRecoveryPending || (access.value !== "LOCKED" && access.value !== "REFUNDED") || session?.fullReport) await readReport(true);
+  if (session?.reportRecoveryPending || session?.fullReport) await reconcilePaymentAndEntitlement("initial");
   if (!active || requestVersion !== loadVersion) return;
   pageState.value = result.value ? "ready" : "error";
   if (pageState.value === "ready") {
@@ -311,7 +372,7 @@ async function loadHistory(id: string): Promise<void> {
   report.value = null;
   result.value = null;
   proof.value = null;
-  access.value = "ENTITLED_LOADING";
+  setAccess("ENTITLED_LOADING");
   saveGoalFitHistoryReportRecovery({ assessmentId: id, recoveryPending: false });
   try {
     const free = await fetchGoalFitFreeResult(id);
@@ -326,7 +387,7 @@ async function loadHistory(id: string): Promise<void> {
     error.value = "报告权益状态暂时无法确认，请重新加载。";
   }
   purchaseStateLoaded.value = true;
-  await readReport(true);
+  await reconcilePaymentAndEntitlement("initial");
   if (active && requestVersion === loadVersion && result.value) pageState.value = "ready";
   void trackEvent("goal_fit_report_detail_view", { metadata: { recovery: true } });
 }
@@ -337,46 +398,25 @@ async function unlock(): Promise<void> {
     const blocked = paymentFlowBlockedReason();
     if (blocked) { reportPaymentFlowBlocked(blocked); return; }
     void trackEvent("payment_flow_entered", { metadata: paymentFlowMetadata() });
-    access.value = "PREPARING_PAYMENT";
+    setAccess("PREPARING_PAYMENT", { force: true });
     const outcome = await startManagedGoalFitVirtualPayment({ assessmentId: assessmentId.value });
     if (outcome.status === "paid") {
-      access.value = "ENTITLED_LOADING";
+      setAccess("ENTITLED_LOADING");
       save();
       void trackEvent("goal_fit_payment_confirmed", { metadata: { reportType: proof.value?.reportType } });
       if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
-      else await readReport();
-    } else if (outcome.status === "cancelled" || outcome.status === "closed") access.value = "PAYMENT_CANCELLED";
-    else if (outcome.status === "pending") access.value = "CONFIRMING_PAYMENT";
+      else await reconcilePaymentAndEntitlement("payment_callback");
+    } else if (outcome.status === "cancelled" || outcome.status === "closed") setAccess("PAYMENT_CANCELLED", { force: true });
+    else if (outcome.status === "pending") setAccess("CONFIRMING_PAYMENT");
     else if (outcome.status === "entitled_pending") {
-      access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
+      setAccess("ENTITLED_TEMPORARY_UNAVAILABLE");
       historyEntitlementUncertain.value = false;
     }
-    else access.value = "PAYMENT_FAILED";
+    else setAccess("PAYMENT_FAILED", { force: true });
     save();
   } catch {
     reportPaymentFlowBlocked("UNEXPECTED_HANDLER_ERROR");
-    access.value = "PAYMENT_FAILED";
-    save();
-  }
-}
-
-async function resume(): Promise<void> {
-  if (!assessmentId.value || getPlatform() !== "wechat_miniapp") return;
-  const outcome = await resumeManagedGoalFitVirtualPaymentConfirmation({ assessmentId: assessmentId.value });
-  if (outcome === null && !historyMode.value && !report.value && ["PREPARING_PAYMENT", "INVOKING_PAYMENT", "CONFIRMING_PAYMENT"].includes(access.value)) {
-    access.value = "LOCKED";
-    save();
-    return;
-  }
-  if (outcome?.status === "paid") {
-    access.value = "ENTITLED_LOADING";
-    save();
-    if (outcome.report) setUnlocked(outcome.report as GoalFitFullReportResponse);
-      else await readReport(true);
-  }
-  if (outcome?.status === "entitled_pending") {
-    access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
-    historyEntitlementUncertain.value = false;
+    setAccess("PAYMENT_FAILED", { force: true });
     save();
   }
 }
@@ -384,11 +424,11 @@ async function resume(): Promise<void> {
 function state(value: GoalFitVirtualPaymentState): void {
   if (!active || (value.assessmentId && value.assessmentId !== assessmentId.value)) return;
   payment.value = value;
-  if (value.status === "preparing") access.value = "PREPARING_PAYMENT";
-  if (value.status === "invoking") access.value = "INVOKING_PAYMENT";
-  if (value.status === "confirming") access.value = "CONFIRMING_PAYMENT";
-  if (value.status === "entitled_loading") access.value = "ENTITLED_LOADING";
-  if (value.status === "entitled_pending") access.value = "ENTITLED_TEMPORARY_UNAVAILABLE";
+  if (value.status === "preparing") setAccess("PREPARING_PAYMENT");
+  if (value.status === "invoking") setAccess("INVOKING_PAYMENT");
+  if (value.status === "confirming") setAccess("CONFIRMING_PAYMENT");
+  if (value.status === "entitled_loading") setAccess("ENTITLED_LOADING");
+  if (value.status === "entitled_pending") setAccess("ENTITLED_TEMPORARY_UNAVAILABLE");
 }
 
 onLoad((query) => {
@@ -403,15 +443,11 @@ onLoad((query) => {
   diagnostic("free_result_page_mounted", { source: historyRequested ? "history_route" : requestedSessionId ? "route_session" : "route_assessment", contextMatch: true });
   if (historyRequested && requestedAssessmentId) void loadHistory(requestedAssessmentId);
   else if (recovery) void loadHistory(recovery.assessmentId);
-  else void load(requestedSessionId, requestedAssessmentId).then(resume);
+  else void load(requestedSessionId, requestedAssessmentId);
 });
 onShow(() => {
-  if (historyMode.value) {
-    if (access.value === "ENTITLED_TEMPORARY_UNAVAILABLE" && autoRetries++ < 1) void readReport(true);
-    return;
-  }
-  if (access.value === "ENTITLED_TEMPORARY_UNAVAILABLE" && autoRetries++ < 1) void readReport(true);
-  else void resume();
+  if (access.value === "ENTITLED_TEMPORARY_UNAVAILABLE" && autoRetries++ >= 1) return;
+  void reconcilePaymentAndEntitlement("on_show");
 });
 onUnload(() => {
   active = false;
@@ -499,17 +535,6 @@ function retryLoad(): void {
       <view v-if="access === 'REFUNDED'" class="refund-card card">
         <text class="section-title">该报告已退款</text>
         <text class="section-copy">完整报告查看权限已关闭。你的测评结果概览仍然保留，也可以重新解锁这份专属报告。</text>
-      </view>
-
-      <view v-if="access === 'ENTITLED_LOADING'" class="recovery-card card">
-        <text class="section-title">付款已确认，正在生成完整报告……</text>
-        <text class="section-copy">完整报告准备完成后会自动展示，你不需要再次付款。</text>
-      </view>
-
-      <view v-if="access === 'ENTITLED_TEMPORARY_UNAVAILABLE'" class="recovery-card card">
-        <text class="section-title">{{ historyEntitlementUncertain ? '报告权益状态暂时无法确认' : '报告正在同步' }}</text>
-        <text class="section-copy">{{ historyEntitlementUncertain ? '请重新加载报告，你不需要再次付款。' : '付款已完成，完整报告暂时未能加载。请稍后重试。' }}</text>
-        <button class="retry-button" @click="readReport(true)">重新加载报告</button>
       </view>
 
       <view v-if="conversion && (!result || !proof || activePaidView === 'full')" class="full-report">
